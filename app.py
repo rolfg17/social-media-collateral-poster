@@ -32,6 +32,36 @@ def clean_text_for_image(text):
     text = re.sub(r'\?utm_[^&\s]+(&utm_[^&\s]+)*', '', text)
     text = re.sub(r'\?r=[^&\s]+', '', text)
     
+    # Remove quotation marks (single and double)
+    text = text.replace('"', '').replace('"', '').replace('"', '')  # Smart quotes
+    text = text.replace("'", '').replace(''', '').replace(''', '')  # Smart single quotes
+    text = text.replace('"', '').replace("'", '')  # Regular quotes
+    
+    # Remove leading hyphens at the start of sections
+    text = re.sub(r'(?m)^-\s*', '', text)
+    
+    # Extract hashtags and put them on a new line
+    main_text = []
+    hashtags = []
+    
+    for line in text.split('\n'):
+        # Find all hashtags in the line
+        tags = re.findall(r'#\w+', line)
+        if tags:
+            # Remove the hashtags from the line
+            clean_line = re.sub(r'\s*#\w+\s*', '', line).strip()
+            if clean_line:  # Only add non-empty lines
+                main_text.append(clean_line)
+            hashtags.extend(tags)
+        else:
+            if line.strip():  # Only add non-empty lines
+                main_text.append(line.strip())
+    
+    # Combine main text and hashtags
+    text = '\n'.join(main_text)
+    if hashtags:
+        text = text + '\n\n' + ' '.join(hashtags)
+    
     # Clean up any leftover artifacts
     text = re.sub(r'\s+[.!?]', '.', text)  # Fix floating punctuation
     text = re.sub(r'\s{2,}', ' ', text)    # Remove multiple spaces
@@ -46,17 +76,20 @@ def clean_text_for_image(text):
     
     return text.strip()
 
-def parse_markdown_content(content):
+def parse_markdown_content(content, config=None):
     """Parse sections from markdown content string"""
     sections = {}
     current_section = None
     current_content = []
     in_collaterals = False
+    header_counts = {}  # Keep track of how many times we've seen each header
+    
+    collaterals_header = config.get('collaterals_header', '# Collaterals') if config else '# Collaterals'
 
     lines = content.split('\n')
     for line in lines:
         # Start collecting at "# Collaterals"
-        if line.strip() == "# Collaterals":
+        if line.strip() == collaterals_header:
             in_collaterals = True
             continue
         # Stop at next level 1 header
@@ -68,8 +101,13 @@ def parse_markdown_content(content):
                 # Save previous section if exists
                 if current_section:
                     sections[current_section] = '\n'.join(current_content).strip()
-                # Start new section
-                current_section = line.lstrip("#").strip()
+                # Start new section with unique name
+                base_section = line.lstrip("#").strip()
+                if base_section in header_counts:
+                    header_counts[base_section] += 1
+                else:
+                    header_counts[base_section] = 1
+                current_section = f"{base_section} ({header_counts[base_section]})"
                 current_content = []
             # Add content lines (skip other headers)
             elif current_section is not None and not line.startswith("#"):
@@ -130,7 +168,7 @@ def create_text_image(text, width=700, height=700, font_size=40, config=None):
         return total_lines * line_spacing, font
     
     # Create a new image with alpha channel and light gray background
-    image = Image.new('RGBA', (width, height), (245, 245, 245, 255))
+    image = Image.new('RGBA', (width, height), (248, 248, 248, 255))
     draw = ImageDraw.Draw(image)
     
     # Define margins and spacing
@@ -244,7 +282,7 @@ def create_text_image(text, width=700, height=700, font_size=40, config=None):
         footer_text = config['footer']
         footer_width = draw.textlength(footer_text, font=header_footer_font)
         footer_x = (width - footer_width) / 2
-        footer_y = height - bottom_margin // 2  # Centered in bottom margin
+        footer_y = height - bottom_margin - font_size // 4  # Added more space by subtracting font_size//4
         draw.text((footer_x, footer_y), footer_text, fill='#666666', font=header_footer_font)
     
     return image
@@ -360,7 +398,7 @@ def main():
         content = uploaded_file.getvalue().decode('utf-8')
     
     # Parse sections from the markdown content
-    sections = parse_markdown_content(content)
+    sections = parse_markdown_content(content, config)
     
     if not sections:
         st.error("No sections found in the markdown file. Make sure to use '### ' to mark section headers.")
