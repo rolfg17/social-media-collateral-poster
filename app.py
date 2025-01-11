@@ -10,6 +10,12 @@ import os
 import re
 import tempfile
 import uuid
+from instagram_client import InstagramClient
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 def load_config():
     config_path = Path(__file__).parent / 'config.json'
@@ -334,6 +340,9 @@ def main():
     # Load configuration
     config = load_config()
     
+    # Create Instagram client
+    instagram = InstagramClient(config)
+    
     # Add file uploader
     uploaded_file = st.file_uploader("Choose a markdown file", type=['md'], help="Upload a markdown file with sections to process")
     
@@ -363,42 +372,86 @@ def main():
         else:
             if st.session_state.select_all:
                 st.session_state.select_all = False
+        
+        col1, col2 = st.columns(2)
+        
+        # Add save button to first column
+        with col1:
+            if st.button("Save to Photos"):
+                selected_paths = [path for title, path in st.session_state.get('temp_image_paths', [])
+                                if st.session_state.selected_images.get(title, False)]
                 
-        # Add save button to sidebar
-        if st.button("Save Selected to Photos"):
-            selected_paths = [path for title, path in st.session_state.get('temp_image_paths', [])
-                            if st.session_state.selected_images.get(title, False)]
-            
-            if not selected_paths:
-                st.warning("Please select at least one image first.")
-            else:
-                if save_to_photos(selected_paths):
-                    st.success(f"Successfully saved {len(selected_paths)} image(s) to Photos!")
+                if not selected_paths:
+                    st.warning("Please select at least one image first.")
                 else:
-                    st.error("Failed to save images to Photos. Please make sure Photos app is accessible.")
+                    if save_to_photos(selected_paths):
+                        st.success(f"Successfully saved {len(selected_paths)} image(s) to Photos!")
+                    else:
+                        st.error("Failed to save images to Photos. Please make sure Photos app is accessible.")
     
     # Find the latest collaterals file from config if no file is uploaded
     if uploaded_file is None:
         vault_path = Path(config['obsidian_vault_path'])
         input_filename = Path(config['input_file_path']).stem
-        
         collateral_files = list(vault_path.glob(f"{input_filename}-collaterals*.md"))
+        
         if not collateral_files:
-            st.error("No collateral files found. Please generate collaterals first or upload a markdown file.")
+            st.error("No collateral files found in vault")
             return
         
-        # Get the latest file
         latest_file = max(collateral_files, key=lambda x: x.stat().st_mtime)
-        
-        # Read the content
         with open(latest_file, 'r') as f:
             content = f.read()
     else:
-        # Read the uploaded file
         content = uploaded_file.getvalue().decode('utf-8')
     
-    # Parse sections from the markdown content
+    # Parse markdown content
     sections = parse_markdown_content(content, config)
+    
+    # Add Instagram post button to second column in sidebar
+    with st.sidebar:
+        with col2:
+            if st.button("Post to Instagram"):
+                selected_items = [(title, sections[title], path) 
+                                for title, path in st.session_state.get('temp_image_paths', [])
+                                if st.session_state.selected_images.get(title, False)
+                                and title in sections]
+                
+                if not selected_items:
+                    st.warning("Please select at least one image first.")
+                else:
+                    if instagram.mock_mode:
+                        st.info("Running in mock mode (no Instagram credentials). Here's what would happen:")
+                        for title, content, path in selected_items:
+                            # Combine header and content for caption
+                            cleaned_content = clean_text_for_image(content)
+                            header = config.get('header', '')
+                            caption = f"{header}\n\n{cleaned_content}" if header else cleaned_content
+                            
+                            container_id = instagram.create_container(path, caption)
+                            st.success(f"Would create post for '{title}' with caption:\n\n{caption}")
+                    else:
+                        if not config['instagram']['access_token']:
+                            st.error("Please configure Instagram credentials in config.json")
+                        else:
+                            for title, content, path in selected_items:
+                                # Combine header and content for caption
+                                cleaned_content = clean_text_for_image(content)
+                                header = config.get('header', '')
+                                caption = f"{header}\n\n{cleaned_content}" if header else cleaned_content
+                                
+                                container_id = instagram.create_container(path, caption)
+                                
+                                if container_id:
+                                    if instagram.test_mode:
+                                        st.success(f"Test mode: Created draft post for '{title}'")
+                                    else:
+                                        if instagram.publish_container(container_id):
+                                            st.success(f"Posted '{title}' to Instagram!")
+                                        else:
+                                            st.error(f"Failed to publish '{title}' to Instagram")
+                                else:
+                                    st.error(f"Failed to create container for '{title}'")
     
     if not sections:
         st.error("No sections found in the markdown file. Make sure to use '### ' to mark section headers.")
