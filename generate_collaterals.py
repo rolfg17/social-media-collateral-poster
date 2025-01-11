@@ -39,8 +39,27 @@ def generate_chatgpt_response(content, prompt, api_key):
         http_client=httpx.Client()
     )
     
+    system_prompt = f"""Your task: {prompt}
+
+IMPORTANT - You must format your response following these rules:
+1. Start with "# Collaterals"
+2. Use ONLY level 2 headers (##) for each social media section
+3. Each section should start with "## 📱[Header from template]"
+4. Put the content for each platform under its header
+5. Do not use any other header levels
+
+Example format:
+# Collaterals
+
+## 📸 Motivational Blurp
+[Instagram content here]
+
+## 💼 Contrarian Post
+[LinkedIn content here]
+"""
+    
     messages = [
-        {"role": "system", "content": prompt},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": content}
     ]
     
@@ -49,7 +68,12 @@ def generate_chatgpt_response(content, prompt, api_key):
         messages=messages
     )
     
-    return response.choices[0].message.content
+    # Ensure response starts with # Collaterals
+    response_text = response.choices[0].message.content
+    if not response_text.strip().startswith("# Collaterals"):
+        response_text = "# Collaterals\n\n" + response_text
+    
+    return response_text
 
 def save_response(response, input_file_path, vault_path):
     # Get the original filename without extension
@@ -70,9 +94,36 @@ def save_response(response, input_file_path, vault_path):
     # Add backlink to the original file
     backlink = f"Generated from: [[{input_filename}]]\n\n"
     
-    # Write the response with the backlink
+    # Validate and fix response format
+    lines = response.split('\n')
+    fixed_lines = []
+    in_collaterals = False
+    current_section = None
+    
+    for line in lines:
+        # Handle Collaterals header
+        if line.strip() == "# Collaterals":
+            in_collaterals = True
+            fixed_lines.append(line)
+            continue
+            
+        if in_collaterals:
+            # Fix section headers if needed
+            if line.startswith('#'):
+                if not line.startswith('## '):
+                    # Convert any header to level 2
+                    title = line.lstrip('#').strip()
+                    if not title.startswith('Social Media:'):
+                        title = f"Social Media: {title}"
+                    if not any(emoji in title for emoji in ['📱', '📸', '💼', '🐦']):
+                        title = f"📱 {title}"
+                    line = f"## {title}"
+                current_section = line
+            fixed_lines.append(line)
+    
+    # Write the response with the backlink and fixed format
     with open(output_path, 'w', encoding='utf-8') as f:
-        f.write(backlink + response)
+        f.write(backlink + '\n'.join(fixed_lines))
 
 def main():
     # Load configuration

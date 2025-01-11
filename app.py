@@ -12,7 +12,8 @@ import tempfile
 import uuid
 
 def load_config():
-    with open('config.json', 'r') as f:
+    config_path = Path(__file__).parent / 'config.json'
+    with open(config_path, 'r') as f:
         return json.load(f)
 
 def clean_text_for_image(text):
@@ -45,29 +46,39 @@ def clean_text_for_image(text):
     
     return text.strip()
 
-def parse_markdown_sections(file_path):
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
+def parse_markdown_content(content):
+    """Parse sections from markdown content string"""
     sections = {}
     current_section = None
     current_content = []
-    
-    for line in content.split('\n'):
-        if line.startswith('###'):
-            if current_section:
-                sections[current_section] = '\n'.join(current_content).strip()
-            current_section = line[3:].strip()
-            current_content = []
-        elif line.startswith('#'):
+    in_collaterals = False
+
+    lines = content.split('\n')
+    for line in lines:
+        # Start collecting at "# Collaterals"
+        if line.strip() == "# Collaterals":
+            in_collaterals = True
             continue
-        else:
-            if current_section:
+        # Stop at next level 1 header
+        elif line.startswith("# ") and in_collaterals:
+            break
+        # Process content only when we're in the Collaterals section
+        elif in_collaterals:
+            if line.startswith("## "):
+                # Save previous section if exists
+                if current_section:
+                    sections[current_section] = '\n'.join(current_content).strip()
+                # Start new section
+                current_section = line.lstrip("#").strip()
+                current_content = []
+            # Add content lines (skip other headers)
+            elif current_section is not None and not line.startswith("#"):
                 current_content.append(line)
-    
-    if current_section:
+
+    # Save the last section
+    if current_section and in_collaterals:
         sections[current_section] = '\n'.join(current_content).strip()
-    
+
     return sections
 
 def get_emoji_image(emoji_char, size):
@@ -94,15 +105,63 @@ def get_emoji_image(emoji_char, size):
     except:
         return None
 
-def create_text_image(text, width=700, height=700, font_size=40):
+def create_text_image(text, width=700, height=700, font_size=40, config=None):
+    def calculate_text_height(text, font_size, width, draw):
+        try:
+            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
+        except:
+            font = ImageFont.load_default()
+            
+        # Calculate max chars per line
+        avg_char_width = sum(draw.textlength(char, font=font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
+        max_chars = int((width * 0.9) / avg_char_width)
+        
+        # Process text and count lines
+        paragraphs = text.split('\n\n')
+        total_lines = 0
+        
+        for paragraph in paragraphs:
+            wrapped_text = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars)
+            total_lines += len(wrapped_text.split('\n'))
+            if len(paragraphs) > 1:
+                total_lines += 1  # Add space between paragraphs
+                
+        line_spacing = font_size * 1.2
+        return total_lines * line_spacing, font
+    
     # Create a new image with alpha channel and light gray background
     image = Image.new('RGBA', (width, height), (245, 245, 245, 255))
     draw = ImageDraw.Draw(image)
     
+    # Define margins and spacing
+    top_margin = 40
+    bottom_margin = 40
+    header_height = font_size // 2 + 20 if config and config.get('header') else 0
+    footer_height = font_size // 2 + 20 if config and config.get('footer') else 0
+    
+    # Calculate available height for main text
+    available_height = height - header_height - footer_height - top_margin - bottom_margin
+    
+    # Find the right font size
+    while font_size > 20:  # Don't go smaller than 20pt
+        text_height, font = calculate_text_height(text, font_size, width, draw)
+        if text_height <= available_height:
+            break
+        font_size -= 2
+    
+    # Get fonts for header/footer
     try:
-        font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
+        header_footer_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size // 2)
     except:
-        font = ImageFont.load_default()
+        header_footer_font = ImageFont.load_default()
+    
+    # Draw header if present
+    if config and config.get('header'):
+        header_text = config['header']
+        header_width = draw.textlength(header_text, font=header_footer_font)
+        header_x = (width - header_width) / 2
+        header_y = top_margin // 2  # Centered in top margin
+        draw.text((header_x, header_y), header_text, fill='#666666', font=header_footer_font)
     
     # Calculate maximum characters per line based on average character width
     avg_char_width = sum(draw.textlength(char, font=font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
@@ -145,10 +204,12 @@ def create_text_image(text, width=700, height=700, font_size=40):
     if processed_paragraphs and not processed_paragraphs[-1]:
         processed_paragraphs.pop()
     
-    # Calculate total height and starting y position
+    # Calculate total height and starting y position for main text
     line_spacing = font_size * 1.2
     total_height = len(processed_paragraphs) * line_spacing
-    y = (height - total_height) / 2
+    
+    # Center the text between header and footer
+    y = top_margin + header_height + (available_height - total_height) / 2
     
     # Draw each line
     for line in processed_paragraphs:
@@ -178,6 +239,14 @@ def create_text_image(text, width=700, height=700, font_size=40):
         
         y += line_spacing
     
+    # Draw footer if present
+    if config and config.get('footer'):
+        footer_text = config['footer']
+        footer_width = draw.textlength(footer_text, font=header_footer_font)
+        footer_x = (width - footer_width) / 2
+        footer_y = height - bottom_margin // 2  # Centered in bottom margin
+        draw.text((footer_x, footer_y), footer_text, fill='#666666', font=header_footer_font)
+    
     return image
 
 def save_to_photos(image_paths):
@@ -196,8 +265,24 @@ def save_to_photos(image_paths):
             success = False
     return success
 
+def update_selection(title):
+    """Update selection state and handle select all checkbox"""
+    st.session_state.selected_images[title] = st.session_state[f"checkbox_{title}"]
+    if not st.session_state[f"checkbox_{title}"] and st.session_state.select_all:
+        st.session_state.select_all = False
+
 def main():
     st.set_page_config(layout="wide")  # Use wide layout for better spacing
+    
+    # Add custom CSS for image background
+    st.markdown("""
+        <style>
+        .stImage img {
+            background-color: #f5f5f5;
+            padding: 8px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
     
     # Title in main area
     st.title("Social Media Collateral Images")
@@ -208,9 +293,30 @@ def main():
     if 'select_all' not in st.session_state:
         st.session_state.select_all = False
     
+    # Load configuration
+    config = load_config()
+    
+    # Add file uploader
+    uploaded_file = st.file_uploader("Choose a markdown file", type=['md'], help="Upload a markdown file with sections to process")
+    
     # Create a sidebar for controls
     with st.sidebar:
         st.markdown("### Controls")
+        
+        # Show current file being processed
+        if uploaded_file:
+            st.info(f"Processing uploaded file: {uploaded_file.name}")
+        else:
+            vault_path = Path(config['obsidian_vault_path'])
+            input_filename = Path(config['input_file_path']).stem
+            collateral_files = list(vault_path.glob(f"{input_filename}-collaterals*.md"))
+            if collateral_files:
+                latest_file = max(collateral_files, key=lambda x: x.stat().st_mtime)
+                st.info(f"Processing file: {latest_file.name}")
+                st.caption(f"Full path: {latest_file}")
+            else:
+                st.warning("No collateral files found")
+        
         # Add select all checkbox in sidebar (always visible)
         if st.checkbox("Select All Images", key="select_all_checkbox", value=st.session_state.select_all):
             st.session_state.select_all = True
@@ -219,7 +325,7 @@ def main():
         else:
             if st.session_state.select_all:
                 st.session_state.select_all = False
-        
+                
         # Add save button to sidebar
         if st.button("Save Selected to Photos"):
             selected_paths = [path for title, path in st.session_state.get('temp_image_paths', [])
@@ -233,39 +339,37 @@ def main():
                 else:
                     st.error("Failed to save images to Photos. Please make sure Photos app is accessible.")
     
-    # Load configuration
-    config = load_config()
+    # Find the latest collaterals file from config if no file is uploaded
+    if uploaded_file is None:
+        vault_path = Path(config['obsidian_vault_path'])
+        input_filename = Path(config['input_file_path']).stem
+        
+        collateral_files = list(vault_path.glob(f"{input_filename}-collaterals*.md"))
+        if not collateral_files:
+            st.error("No collateral files found. Please generate collaterals first or upload a markdown file.")
+            return
+        
+        # Get the latest file
+        latest_file = max(collateral_files, key=lambda x: x.stat().st_mtime)
+        
+        # Read the content
+        with open(latest_file, 'r') as f:
+            content = f.read()
+    else:
+        # Read the uploaded file
+        content = uploaded_file.getvalue().decode('utf-8')
     
-    # Find the latest collaterals file
-    vault_path = Path(config['obsidian_vault_path'])
-    input_filename = Path(config['input_file_path']).stem
+    # Parse sections from the markdown content
+    sections = parse_markdown_content(content)
     
-    collateral_files = list(vault_path.glob(f"{input_filename}-collaterals*.md"))
-    if not collateral_files:
-        st.error("No collateral files found. Please generate collaterals first.")
+    if not sections:
+        st.error("No sections found in the markdown file. Make sure to use '### ' to mark section headers.")
         return
-    
-    # Get the latest file
-    latest_file = max(collateral_files, key=lambda x: x.stat().st_mtime)
-    
-    # Parse sections from the markdown file
-    sections = parse_markdown_sections(latest_file)
-    
-    # Create and display images for each section
-    temp_image_paths = []
-    
-    # Add custom CSS for image background
-    st.markdown("""
-        <style>
-        .stImage img {
-            background-color: #f5f5f5;
-            padding: 8px;
-        }
-        </style>
-    """, unsafe_allow_html=True)
     
     # Process images in pairs
     sections_items = list(sections.items())
+    temp_image_paths = []
+    
     for i in range(0, len(sections_items), 2):
         # Create a row for each pair of images
         col1, col2 = st.columns(2)
@@ -277,42 +381,36 @@ def main():
                 st.subheader(title)
                 # Clean the text before creating the image
                 cleaned_content = clean_text_for_image(content)
-                image = create_text_image(cleaned_content)
-                # Convert RGBA to RGB for Streamlit with light gray background
-                image_rgb = Image.new('RGB', image.size, (245, 245, 245))  # #f5f5f5 in RGB
-                image_rgb.paste(image, mask=image.split()[3])
+                image = create_text_image(cleaned_content, config=config)
                 
                 # Save image to temporary file
                 with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    image_rgb.save(tmp.name)
+                    image.save(tmp.name)
                     temp_image_paths.append((title, tmp.name))
+                
+                # Initialize this image's state if not present
+                if title not in st.session_state.selected_images:
+                    st.session_state.selected_images[title] = st.session_state.select_all
                 
                 # Create checkbox and image container
                 check_col, img_col = st.columns([1, 10])
                 
-                # Initialize this image's state if not present
-                if title not in st.session_state.selected_images:
-                    st.session_state.selected_images[title] = False
-                
                 # Checkbox
                 with check_col:
-                    if st.checkbox(
+                    st.checkbox(
                         "Select image",
-                        key=f"select_{title}",
-                        value=st.session_state.selected_images[title],
+                        key=f"checkbox_{title}",
+                        value=st.session_state.selected_images.get(title, False),
+                        on_change=update_selection,
+                        args=(title,),
                         label_visibility="collapsed"
-                    ):
-                        st.session_state.selected_images[title] = True
-                    else:
-                        st.session_state.selected_images[title] = False
-                        if st.session_state.select_all:
-                            st.session_state.select_all = False
+                    )
                 
                 # Image
                 with img_col:
-                    st.image(image_rgb, use_column_width=True)
+                    st.image(tmp.name, use_column_width=True)
                 
-                # Optionally show the cleaned text for debugging
+                # Show the cleaned text for debugging
                 with st.expander("Show cleaned text"):
                     st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
         
@@ -324,42 +422,36 @@ def main():
                     st.subheader(title)
                     # Clean the text before creating the image
                     cleaned_content = clean_text_for_image(content)
-                    image = create_text_image(cleaned_content)
-                    # Convert RGBA to RGB for Streamlit with light gray background
-                    image_rgb = Image.new('RGB', image.size, (245, 245, 245))  # #f5f5f5 in RGB
-                    image_rgb.paste(image, mask=image.split()[3])
+                    image = create_text_image(cleaned_content, config=config)
                     
                     # Save image to temporary file
                     with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                        image_rgb.save(tmp.name)
+                        image.save(tmp.name)
                         temp_image_paths.append((title, tmp.name))
+                    
+                    # Initialize this image's state if not present
+                    if title not in st.session_state.selected_images:
+                        st.session_state.selected_images[title] = st.session_state.select_all
                     
                     # Create checkbox and image container
                     check_col, img_col = st.columns([1, 10])
                     
-                    # Initialize this image's state if not present
-                    if title not in st.session_state.selected_images:
-                        st.session_state.selected_images[title] = False
-                    
                     # Checkbox
                     with check_col:
-                        if st.checkbox(
+                        st.checkbox(
                             "Select image",
-                            key=f"select_{title}",
-                            value=st.session_state.selected_images[title],
+                            key=f"checkbox_{title}",
+                            value=st.session_state.selected_images.get(title, False),
+                            on_change=update_selection,
+                            args=(title,),
                             label_visibility="collapsed"
-                        ):
-                            st.session_state.selected_images[title] = True
-                        else:
-                            st.session_state.selected_images[title] = False
-                            if st.session_state.select_all:
-                                st.session_state.select_all = False
+                        )
                     
                     # Image
                     with img_col:
-                        st.image(image_rgb, use_column_width=True)
+                        st.image(tmp.name, use_column_width=True)
                     
-                    # Optionally show the cleaned text for debugging
+                    # Show the cleaned text for debugging
                     with st.expander("Show cleaned text"):
                         st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
         
