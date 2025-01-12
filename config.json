@@ -10,5 +10,10 @@
         "instagram_account_id": "",
         "facebook_page_id": "",
         "test_mode": true
+    },
+    "linkedin": {
+        "access_token": "",
+        "author_id": "",
+        "test_mode": true
     }
 }

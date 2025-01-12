@@ -11,6 +11,7 @@ import re
 import tempfile
 import uuid
 from instagram_client import InstagramClient
+from linkedin_client import LinkedInClient
 import logging
 
 # Set up logging
@@ -340,8 +341,9 @@ def main():
     # Load configuration
     config = load_config()
     
-    # Create Instagram client
+    # Create social media clients
     instagram = InstagramClient(config)
+    linkedin = LinkedInClient(config)
     
     # Add file uploader
     uploaded_file = st.file_uploader("Choose a markdown file", type=['md'], help="Upload a markdown file with sections to process")
@@ -373,7 +375,7 @@ def main():
             if st.session_state.select_all:
                 st.session_state.select_all = False
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         
         # Add save button to first column
         with col1:
@@ -408,8 +410,9 @@ def main():
     # Parse markdown content
     sections = parse_markdown_content(content, config)
     
-    # Add Instagram post button to second column in sidebar
+    # Add social media buttons to sidebar
     with st.sidebar:
+        # Add Instagram post button to second column
         with col2:
             if st.button("Post to Instagram"):
                 selected_items = [(title, sections[title], path) 
@@ -452,6 +455,46 @@ def main():
                                             st.error(f"Failed to publish '{title}' to Instagram")
                                 else:
                                     st.error(f"Failed to create container for '{title}'")
+        
+        # Add LinkedIn post button to third column
+        with col3:
+            if st.button("Post to LinkedIn"):
+                selected_items = [(title, sections[title], path) 
+                                for title, path in st.session_state.get('temp_image_paths', [])
+                                if st.session_state.selected_images.get(title, False)
+                                and title in sections]
+                
+                if not selected_items:
+                    st.warning("Please select at least one image first.")
+                else:
+                    if linkedin.mock_mode:
+                        st.info("Running in mock mode (no LinkedIn credentials). Here's what would happen:")
+                        for title, content, path in selected_items:
+                            # Combine header and content for text
+                            cleaned_content = clean_text_for_image(content)
+                            header = config.get('header', '')
+                            text = f"{header}\n\n{cleaned_content}" if header else cleaned_content
+                            
+                            post_id = linkedin.create_post(path, text)
+                            st.success(f"Would create LinkedIn post for '{title}' with text:\n\n{text}")
+                    else:
+                        if not config['linkedin']['access_token']:
+                            st.error("Please configure LinkedIn credentials in config.json")
+                        else:
+                            for title, content, path in selected_items:
+                                # Combine header and content for text
+                                cleaned_content = clean_text_for_image(content)
+                                header = config.get('header', '')
+                                text = f"{header}\n\n{cleaned_content}" if header else cleaned_content
+                                
+                                post_id = linkedin.create_post(path, text)
+                                if post_id:
+                                    if linkedin.test_mode:
+                                        st.success(f"Test mode: Created draft post for '{title}'")
+                                    else:
+                                        st.success(f"Posted '{title}' to LinkedIn!")
+                                else:
+                                    st.error(f"Failed to create LinkedIn post for '{title}'")
     
     if not sections:
         st.error("No sections found in the markdown file. Make sure to use '### ' to mark section headers.")
