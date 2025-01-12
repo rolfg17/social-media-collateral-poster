@@ -10,8 +10,6 @@ import os
 import re
 import tempfile
 import uuid
-from instagram_client import InstagramClient
-from linkedin_client import LinkedInClient
 import logging
 
 # Set up logging
@@ -39,35 +37,41 @@ def clean_text_for_image(text):
     text = re.sub(r'\?utm_[^&\s]+(&utm_[^&\s]+)*', '', text)
     text = re.sub(r'\?r=[^&\s]+', '', text)
     
-    # Remove quotation marks (single and double)
-    text = text.replace('"', '').replace('"', '').replace('"', '')  # Smart quotes
-    text = text.replace("'", '').replace(''', '').replace(''', '')  # Smart single quotes
-    text = text.replace('"', '').replace("'", '')  # Regular quotes
+    # Remove double quotes only (including smart quotes)
+    text = text.replace('"', '').replace('"', '').replace('"', '')  # Smart and regular double quotes
     
     # Remove leading hyphens at the start of sections
     text = re.sub(r'(?m)^-\s*', '', text)
+    
+    # Remove heading numbers (like "1. ", "5. ") and leading whitespace
+    text = re.sub(r'^\s*\d+\.\s*', '', text)
+    text = re.sub(r'(?m)^\s*\d+\.\s*', '', text)  # For multiline
     
     # Extract hashtags and put them on a new line
     main_text = []
     hashtags = []
     
+    # First pass: collect all hashtags and clean the text
     for line in text.split('\n'):
         # Find all hashtags in the line
         tags = re.findall(r'#\w+', line)
         if tags:
-            # Remove the hashtags from the line
-            clean_line = re.sub(r'\s*#\w+\s*', '', line).strip()
-            if clean_line:  # Only add non-empty lines
-                main_text.append(clean_line)
             hashtags.extend(tags)
+            # Remove the hashtags from the line and add if non-empty
+            clean_line = re.sub(r'\s*#\w+\s*', '', line).strip()
+            if clean_line:
+                main_text.append(clean_line)
         else:
-            if line.strip():  # Only add non-empty lines
+            if line.strip():
                 main_text.append(line.strip())
     
-    # Combine main text and hashtags
-    text = '\n'.join(main_text)
+    # Join main text with proper line breaks
+    text = '\n'.join(line for line in main_text if line.strip())
+    
+    # Add hashtags on a new line with proper spacing
     if hashtags:
-        text = text + '\n\n' + ' '.join(hashtags)
+        # Ensure there's a blank line before hashtags by adding two newlines
+        text = text.rstrip() + '\n\n' + ' '.join(sorted(set(hashtags)))
     
     # Clean up any leftover artifacts
     text = re.sub(r'\s+[.!?]', '.', text)  # Fix floating punctuation
@@ -80,6 +84,9 @@ def clean_text_for_image(text):
     
     # Remove empty parentheses that might be left after cleaning
     text = re.sub(r'\(\s*\)', '', text)
+    
+    # Ensure proper spacing between paragraphs
+    text = re.sub(r'\n{3,}', '\n\n', text)  # Replace multiple newlines with double newlines
     
     return text.strip()
 
@@ -341,10 +348,6 @@ def main():
     # Load configuration
     config = load_config()
     
-    # Create social media clients
-    instagram = InstagramClient(config)
-    linkedin = LinkedInClient(config)
-    
     # Add file uploader
     uploaded_file = st.file_uploader("Choose a markdown file", type=['md'], help="Upload a markdown file with sections to process")
     
@@ -375,21 +378,18 @@ def main():
             if st.session_state.select_all:
                 st.session_state.select_all = False
         
-        col1, col2, col3 = st.columns(3)
-        
-        # Add save button to first column
-        with col1:
-            if st.button("Save to Photos"):
-                selected_paths = [path for title, path in st.session_state.get('temp_image_paths', [])
-                                if st.session_state.selected_images.get(title, False)]
-                
-                if not selected_paths:
-                    st.warning("Please select at least one image first.")
+        # Add save button
+        if st.button("Save to Photos"):
+            selected_paths = [path for title, path in st.session_state.get('temp_image_paths', [])
+                            if st.session_state.selected_images.get(title, False)]
+            
+            if not selected_paths:
+                st.warning("Please select at least one image first.")
+            else:
+                if save_to_photos(selected_paths):
+                    st.success(f"Successfully saved {len(selected_paths)} image(s) to Photos!")
                 else:
-                    if save_to_photos(selected_paths):
-                        st.success(f"Successfully saved {len(selected_paths)} image(s) to Photos!")
-                    else:
-                        st.error("Failed to save images to Photos. Please make sure Photos app is accessible.")
+                    st.error("Failed to save images to Photos. Please make sure Photos app is accessible.")
     
     # Find the latest collaterals file from config if no file is uploaded
     if uploaded_file is None:
@@ -410,98 +410,27 @@ def main():
     # Parse markdown content
     sections = parse_markdown_content(content, config)
     
-    # Add social media buttons to sidebar
-    with st.sidebar:
-        # Add Instagram post button to second column
-        with col2:
-            if st.button("Post to Instagram"):
-                selected_items = [(title, sections[title], path) 
-                                for title, path in st.session_state.get('temp_image_paths', [])
-                                if st.session_state.selected_images.get(title, False)
-                                and title in sections]
-                
-                if not selected_items:
-                    st.warning("Please select at least one image first.")
-                else:
-                    if instagram.mock_mode:
-                        st.info("Running in mock mode (no Instagram credentials). Here's what would happen:")
-                        for title, content, path in selected_items:
-                            # Combine header and content for caption
-                            cleaned_content = clean_text_for_image(content)
-                            header = config.get('header', '')
-                            caption = f"{header}\n\n{cleaned_content}" if header else cleaned_content
-                            
-                            container_id = instagram.create_container(path, caption)
-                            st.success(f"Would create post for '{title}' with caption:\n\n{caption}")
-                    else:
-                        if not config['instagram']['access_token']:
-                            st.error("Please configure Instagram credentials in config.json")
-                        else:
-                            for title, content, path in selected_items:
-                                # Combine header and content for caption
-                                cleaned_content = clean_text_for_image(content)
-                                header = config.get('header', '')
-                                caption = f"{header}\n\n{cleaned_content}" if header else cleaned_content
-                                
-                                container_id = instagram.create_container(path, caption)
-                                
-                                if container_id:
-                                    if instagram.test_mode:
-                                        st.success(f"Test mode: Created draft post for '{title}'")
-                                    else:
-                                        if instagram.publish_container(container_id):
-                                            st.success(f"Posted '{title}' to Instagram!")
-                                        else:
-                                            st.error(f"Failed to publish '{title}' to Instagram")
-                                else:
-                                    st.error(f"Failed to create container for '{title}'")
-        
-        # Add LinkedIn post button to third column
-        with col3:
-            if st.button("Post to LinkedIn"):
-                selected_items = [(title, sections[title], path) 
-                                for title, path in st.session_state.get('temp_image_paths', [])
-                                if st.session_state.selected_images.get(title, False)
-                                and title in sections]
-                
-                if not selected_items:
-                    st.warning("Please select at least one image first.")
-                else:
-                    if linkedin.mock_mode:
-                        st.info("Running in mock mode (no LinkedIn credentials). Here's what would happen:")
-                        for title, content, path in selected_items:
-                            # Combine header and content for text
-                            cleaned_content = clean_text_for_image(content)
-                            header = config.get('header', '')
-                            text = f"{header}\n\n{cleaned_content}" if header else cleaned_content
-                            
-                            post_id = linkedin.create_post(path, text)
-                            st.success(f"Would create LinkedIn post for '{title}' with text:\n\n{text}")
-                    else:
-                        if not config['linkedin']['access_token']:
-                            st.error("Please configure LinkedIn credentials in config.json")
-                        else:
-                            for title, content, path in selected_items:
-                                # Combine header and content for text
-                                cleaned_content = clean_text_for_image(content)
-                                header = config.get('header', '')
-                                text = f"{header}\n\n{cleaned_content}" if header else cleaned_content
-                                
-                                post_id = linkedin.create_post(path, text)
-                                if post_id:
-                                    if linkedin.test_mode:
-                                        st.success(f"Test mode: Created draft post for '{title}'")
-                                    else:
-                                        st.success(f"Posted '{title}' to LinkedIn!")
-                                else:
-                                    st.error(f"Failed to create LinkedIn post for '{title}'")
-    
     if not sections:
-        st.error("No sections found in the markdown file. Make sure to use '### ' to mark section headers.")
+        st.error("""No valid sections found in the markdown file. Please ensure your file follows this structure:
+
+```markdown
+# Collaterals
+## Section Title 1
+Content for section 1...
+
+## Section Title 2
+Content for section 2...
+```
+
+Note: 
+- Must start with '# Collaterals' header
+- Each section must start with '## ' (level 2 header)
+- Content must be placed under each section header
+""")
         return
     
     # Process images in pairs
-    sections_items = list(sections.items())
+    sections_items = [(title, content) for title, content in sections.items() if content.strip()]
     temp_image_paths = []
     
     for i in range(0, len(sections_items), 2):
@@ -510,8 +439,47 @@ def main():
         
         # Process first image in the pair
         title, content = sections_items[i]
-        if content.strip():
-            with col1:
+        with col1:
+            st.subheader(title)
+            # Clean the text before creating the image
+            cleaned_content = clean_text_for_image(content)
+            image = create_text_image(cleaned_content, config=config)
+            
+            # Save image to temporary file
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                image.save(tmp.name)
+                temp_image_paths.append((title, tmp.name))
+            
+            # Initialize this image's state if not present
+            if title not in st.session_state.selected_images:
+                st.session_state.selected_images[title] = st.session_state.select_all
+            
+            # Create checkbox and image container
+            check_col, img_col = st.columns([1, 10])
+            
+            # Checkbox
+            with check_col:
+                st.checkbox(
+                    "Select image",
+                    key=f"checkbox_{title}",
+                    value=st.session_state.selected_images.get(title, False),
+                    on_change=update_selection,
+                    args=(title,),
+                    label_visibility="collapsed"
+                )
+            
+            # Image
+            with img_col:
+                st.image(tmp.name, use_column_width=True)
+            
+            # Show the cleaned text for debugging
+            with st.expander("Show cleaned text"):
+                st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
+        
+        # Process second image in the pair (if it exists)
+        if i + 1 < len(sections_items):
+            title, content = sections_items[i + 1]
+            with col2:
                 st.subheader(title)
                 # Clean the text before creating the image
                 cleaned_content = clean_text_for_image(content)
@@ -547,47 +515,6 @@ def main():
                 # Show the cleaned text for debugging
                 with st.expander("Show cleaned text"):
                     st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
-        
-        # Process second image in the pair (if it exists)
-        if i + 1 < len(sections_items):
-            title, content = sections_items[i + 1]
-            if content.strip():
-                with col2:
-                    st.subheader(title)
-                    # Clean the text before creating the image
-                    cleaned_content = clean_text_for_image(content)
-                    image = create_text_image(cleaned_content, config=config)
-                    
-                    # Save image to temporary file
-                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                        image.save(tmp.name)
-                        temp_image_paths.append((title, tmp.name))
-                    
-                    # Initialize this image's state if not present
-                    if title not in st.session_state.selected_images:
-                        st.session_state.selected_images[title] = st.session_state.select_all
-                    
-                    # Create checkbox and image container
-                    check_col, img_col = st.columns([1, 10])
-                    
-                    # Checkbox
-                    with check_col:
-                        st.checkbox(
-                            "Select image",
-                            key=f"checkbox_{title}",
-                            value=st.session_state.selected_images.get(title, False),
-                            on_change=update_selection,
-                            args=(title,),
-                            label_visibility="collapsed"
-                        )
-                    
-                    # Image
-                    with img_col:
-                        st.image(tmp.name, use_column_width=True)
-                    
-                    # Show the cleaned text for debugging
-                    with st.expander("Show cleaned text"):
-                        st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
         
         st.markdown("---")
     

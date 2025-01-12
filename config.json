@@ -4,16 +4,5 @@
     "openai_api_key": "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",
     "header": "Coaching Beyond Championships",
     "footer": "Rolf Götz",
-    "collaterals_header": "# Collaterals",
-    "instagram": {
-        "access_token": "",
-        "instagram_account_id": "",
-        "facebook_page_id": "",
-        "test_mode": true
-    },
-    "linkedin": {
-        "access_token": "",
-        "author_id": "",
-        "test_mode": true
-    }
+    "collaterals_header": "# Collaterals"
 }
