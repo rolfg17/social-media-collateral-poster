@@ -50,12 +50,19 @@ def clean_text_for_image(text):
     
     # First pass: collect all hashtags and clean the text
     for line in text.split('\n'):
-        # Find all hashtags in the line
-        tags = re.findall(r'#\w+', line)
+        # Find all hashtags in the line (including those with hyphens and underscores)
+        tags = re.findall(r'#[a-zA-Z0-9_\-]+(?![a-zA-Z0-9_\-])', line)
+        
+        # Process the line
         if tags:
             hashtags.extend(tags)
-            # Remove the hashtags from the line and add if non-empty
-            clean_line = re.sub(r'\s*#\w+\s*', '', line).strip()
+            # Remove the hashtags from the line, preserving spacing
+            clean_line = line
+            for tag in tags:
+                clean_line = clean_line.replace(tag, '')
+            
+            # Clean up any leftover whitespace and add non-empty lines
+            clean_line = ' '.join(clean_line.split())
             if clean_line:
                 main_text.append(clean_line)
         else:
@@ -72,7 +79,7 @@ def clean_text_for_image(text):
     
     # Clean up any leftover artifacts
     text = re.sub(r'\s+[.!?]', '.', text)  # Fix floating punctuation
-    text = re.sub(r'\s{2,}', ' ', text)    # Remove multiple spaces
+    text = re.sub(r' {2,}', ' ', text)     # Remove multiple spaces but not newlines
     text = re.sub(r'[\n\s]*$', '', text)   # Remove trailing whitespace/newlines
     text = re.sub(r'^[\n\s]*', '', text)   # Remove leading whitespace/newlines
     
@@ -184,7 +191,7 @@ def create_text_image(text, width=700, height=700, font_size=40, config=None):
         return total_lines * line_spacing, font
     
     # Create a new image with a white background
-    img = Image.new('RGB', (width, height), 'white')
+    img = Image.new('RGB', (width, height), (248, 248, 248))
     draw = ImageDraw.Draw(img)
 
     # Load fonts
@@ -391,19 +398,20 @@ def main():
         index=0
     )
     
-    # Update session state with font selections
+    # Store font paths in session state
     st.session_state.header_font_path = font_paths[header_font]
     st.session_state.body_font_path = font_paths[body_font]
     
-    # Add custom CSS for image background
-    st.markdown("""
-        <style>
-        .stImage img {
-            background-color: #f5f5f5;
-            padding: 8px;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    # Add header override setting
+    st.sidebar.subheader("Header Settings")
+    header_override = st.sidebar.text_input("Override Header", value="", help="Leave empty to use header from config")
+    
+    # Create a copy of config to avoid modifying the original
+    image_config = config.copy()
+    
+    # Update config with header override if provided
+    if header_override:
+        image_config['header'] = header_override
     
     # Title in main area
     st.title("Social Media Collateral Images")
@@ -512,7 +520,7 @@ Note:
             st.subheader(title)
             # Clean the text before creating the image
             cleaned_content = clean_text_for_image(content)
-            image = create_text_image(cleaned_content, config=config)
+            image = create_text_image(cleaned_content, config=image_config)
             
             # Save image to temporary file
             with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
@@ -552,7 +560,7 @@ Note:
                 st.subheader(title)
                 # Clean the text before creating the image
                 cleaned_content = clean_text_for_image(content)
-                image = create_text_image(cleaned_content, config=config)
+                image = create_text_image(cleaned_content, config=image_config)
                 
                 # Save image to temporary file
                 with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
