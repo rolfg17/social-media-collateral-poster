@@ -1,15 +1,13 @@
 import streamlit as st
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont
 import json
 from pathlib import Path
 import textwrap
 import emoji
-from io import BytesIO
 import subprocess
 import os
 import re
 import tempfile
-import uuid
 import logging
 
 # Set up logging
@@ -43,9 +41,8 @@ def clean_text_for_image(text):
     # Remove leading hyphens at the start of sections
     text = re.sub(r'(?m)^-\s*', '', text)
     
-    # Remove heading numbers (like "1. ", "5. ") and leading whitespace
-    text = re.sub(r'^\s*\d+\.\s*', '', text)
-    text = re.sub(r'(?m)^\s*\d+\.\s*', '', text)  # For multiline
+    # Normalize spacing in numbered lists (but preserve numbers)
+    text = re.sub(r'(?m)^(\d+\.)\s+', r'\1 ', text)  # Ensure single space after number
     
     # Extract hashtags and put them on a new line
     main_text = []
@@ -160,9 +157,14 @@ def get_emoji_image(emoji_char, size):
 def create_text_image(text, width=700, height=700, font_size=40, config=None):
     def calculate_text_height(text, font_size, width, draw):
         try:
-            font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
+            # Use selected body font
+            font = ImageFont.truetype(st.session_state.body_font_path, font_size)
         except:
-            font = ImageFont.load_default()
+            try:
+                # Fallback to Helvetica if selected font is not available
+                font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
+            except:
+                font = ImageFont.load_default()
             
         # Calculate max chars per line
         avg_char_width = sum(draw.textlength(char, font=font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
@@ -181,39 +183,62 @@ def create_text_image(text, width=700, height=700, font_size=40, config=None):
         line_spacing = font_size * 1.2
         return total_lines * line_spacing, font
     
-    # Create a new image with alpha channel and light gray background
-    image = Image.new('RGBA', (width, height), (248, 248, 248, 255))
-    draw = ImageDraw.Draw(image)
+    # Create a new image with a white background
+    img = Image.new('RGB', (width, height), 'white')
+    draw = ImageDraw.Draw(img)
+
+    # Load fonts
+    try:
+        # Header/footer font size is 60% of body text, but minimum 16pt
+        header_font_size = max(int(font_size * 0.6), 16)
+        header_font = ImageFont.truetype(st.session_state.header_font_path, header_font_size)
+        body_font = ImageFont.truetype(st.session_state.body_font_path, font_size)
+    except:
+        try:
+            header_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", header_font_size)
+            body_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
+        except:
+            header_font = body_font = ImageFont.load_default()
+
+    # Get header and footer from config
+    header = config.get('header', '') if config else ''
+    footer = config.get('footer', '') if config else ''
+
+    # Calculate positions
+    margin = height * 0.05  # 5% margin for both header and footer
     
-    # Define margins and spacing
-    top_margin = 40
-    bottom_margin = 40
-    header_height = font_size // 2 + 20 if config and config.get('header') else 0
-    footer_height = font_size // 2 + 20 if config and config.get('footer') else 0
-    
+    if header:
+        header_bbox = draw.textbbox((0, 0), header, font=header_font)
+        header_height = header_bbox[3] - header_bbox[1]
+        header_width = draw.textlength(header, font=header_font)
+        header_x = (width - header_width) // 2
+        header_y = margin  # 5% from top
+        draw.text((header_x, header_y), header, font=header_font, fill='#444444')
+        start_y = header_y + header_height + margin  # Add margin padding
+    else:
+        start_y = margin * 2  # Double margin if no header
+
+    # Calculate footer position and height
+    if footer:
+        footer_bbox = draw.textbbox((0, 0), footer, font=header_font)
+        footer_height = footer_bbox[3] - footer_bbox[1]
+        footer_width = draw.textlength(footer, font=header_font)
+        footer_x = (width - footer_width) // 2
+        footer_y = height - margin - footer_height  # 5% from bottom
+        end_y = footer_y - margin  # Add margin padding
+        draw.text((footer_x, footer_y), footer, font=header_font, fill='#444444')
+    else:
+        end_y = height - (margin * 2)  # Double margin if no footer
+
     # Calculate available height for main text
-    available_height = height - header_height - footer_height - top_margin - bottom_margin
-    
+    available_height = end_y - start_y
+
     # Find the right font size
     while font_size > 20:  # Don't go smaller than 20pt
         text_height, font = calculate_text_height(text, font_size, width, draw)
         if text_height <= available_height:
             break
         font_size -= 2
-    
-    # Get fonts for header/footer
-    try:
-        header_footer_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size // 2)
-    except:
-        header_footer_font = ImageFont.load_default()
-    
-    # Draw header if present
-    if config and config.get('header'):
-        header_text = config['header']
-        header_width = draw.textlength(header_text, font=header_footer_font)
-        header_x = (width - header_width) / 2
-        header_y = top_margin // 2  # Centered in top margin
-        draw.text((header_x, header_y), header_text, fill='#666666', font=header_footer_font)
     
     # Calculate maximum characters per line based on average character width
     avg_char_width = sum(draw.textlength(char, font=font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
@@ -224,30 +249,51 @@ def create_text_image(text, width=700, height=700, font_size=40, config=None):
     processed_paragraphs = []
     
     for paragraph in paragraphs:
-        # First wrap the text at word boundaries
-        wrapped_text = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars)
+        # Check if this is a list (contains numbered items)
+        if re.search(r'^\d+\.', paragraph, re.MULTILINE):
+            # For lists, preserve line breaks
+            lines = paragraph.split('\n')
+            for line in lines:
+                # Process each line for emojis
+                current_line = []
+                current_word = ""
+                
+                for char in line:
+                    if emoji.is_emoji(char):
+                        if current_word:
+                            current_line.append(("text", current_word))
+                            current_word = ""
+                        current_line.append(("emoji", char))
+                    else:
+                        current_word += char
+                
+                if current_word:
+                    current_line.append(("text", current_word))
+                
+                processed_paragraphs.append(current_line)
+        else:
+            # For regular paragraphs, wrap text normally
+            wrapped_text = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars)
+            
+            # Process each line for emojis
+            for line in wrapped_text.split('\n'):
+                current_line = []
+                current_word = ""
+                
+                for char in line:
+                    if emoji.is_emoji(char):
+                        if current_word:
+                            current_line.append(("text", current_word))
+                            current_word = ""
+                        current_line.append(("emoji", char))
+                    else:
+                        current_word += char
+                
+                if current_word:
+                    current_line.append(("text", current_word))
+                
+                processed_paragraphs.append(current_line)
         
-        # Process each line for emojis
-        processed_lines = []
-        for line in wrapped_text.split('\n'):
-            current_line = []
-            current_word = ""
-            
-            for char in line:
-                if emoji.is_emoji(char):
-                    if current_word:
-                        current_line.append(("text", current_word))
-                        current_word = ""
-                    current_line.append(("emoji", char))
-                else:
-                    current_word += char
-            
-            if current_word:
-                current_line.append(("text", current_word))
-            
-            processed_lines.append(current_line)
-        
-        processed_paragraphs.extend(processed_lines)
         # Add an empty line between paragraphs
         if len(paragraphs) > 1:
             processed_paragraphs.append([])
@@ -261,7 +307,7 @@ def create_text_image(text, width=700, height=700, font_size=40, config=None):
     total_height = len(processed_paragraphs) * line_spacing
     
     # Center the text between header and footer
-    y = top_margin + header_height + (available_height - total_height) / 2
+    y = start_y + (available_height - total_height) / 2
     
     # Draw each line
     for line in processed_paragraphs:
@@ -269,9 +315,9 @@ def create_text_image(text, width=700, height=700, font_size=40, config=None):
             y += line_spacing
             continue
             
-        # Calculate line width for centering
+        # Calculate x position to center this line
         line_width = sum(
-            draw.textlength(word + " ", font=font) if word_type == "text"
+            draw.textlength(word + " ", font=body_font) if word_type == "text"
             else font_size * 1.2  # emoji width
             for word_type, word in line
         )
@@ -280,26 +326,18 @@ def create_text_image(text, width=700, height=700, font_size=40, config=None):
         # Draw each word/emoji in the line
         for word_type, word in line:
             if word_type == "text":
-                draw.text((x, y), word + " ", fill='black', font=font)
-                x += draw.textlength(word + " ", font=font)
+                draw.text((x, y), word + " ", fill='black', font=body_font)
+                x += draw.textlength(word + " ", font=body_font)
             else:  # emoji
                 emoji_img = get_emoji_image(word, font_size)
                 if emoji_img:
                     # Paste emoji with transparency
-                    image.paste(emoji_img, (int(x), int(y)), emoji_img)
+                    img.paste(emoji_img, (int(x), int(y)), emoji_img)
                 x += font_size * 1.2
         
         y += line_spacing
     
-    # Draw footer if present
-    if config and config.get('footer'):
-        footer_text = config['footer']
-        footer_width = draw.textlength(footer_text, font=header_footer_font)
-        footer_x = (width - footer_width) / 2
-        footer_y = height - bottom_margin - font_size // 4  # Added more space by subtracting font_size//4
-        draw.text((footer_x, footer_y), footer_text, fill='#666666', font=header_footer_font)
-    
-    return image
+    return img
 
 def save_to_photos(image_paths):
     """Save images to Photos app using AppleScript"""
@@ -324,7 +362,38 @@ def update_selection(title):
         st.session_state.select_all = False
 
 def main():
-    st.set_page_config(layout="wide")  # Use wide layout for better spacing
+    st.set_page_config(page_title="Social Media Collateral Generator", layout="wide")
+    
+    # Load config
+    with open('config.json', 'r') as f:
+        config = json.load(f)
+    
+    # Sidebar
+    st.sidebar.title("Settings")
+    
+    # Font settings in sidebar
+    st.sidebar.subheader("Font Settings")
+    
+    # Get font configurations from config
+    font_paths = config['fonts']['paths']
+    header_fonts = config['fonts']['header_fonts']
+    body_fonts = config['fonts']['body_fonts']
+    
+    header_font = st.sidebar.selectbox(
+        "Header/Footer Font",
+        header_fonts,
+        index=0
+    )
+    
+    body_font = st.sidebar.selectbox(
+        "Body Font",
+        body_fonts,
+        index=0
+    )
+    
+    # Update session state with font selections
+    st.session_state.header_font_path = font_paths[header_font]
+    st.session_state.body_font_path = font_paths[body_font]
     
     # Add custom CSS for image background
     st.markdown("""

@@ -4,5 +4,18 @@
     "openai_api_key": "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",
     "header": "Coaching Beyond Championships",
     "footer": "Rolf Götz",
-    "collaterals_header": "# Collaterals"
+    "collaterals_header": "# Collaterals",
+    "fonts": {
+        "paths": {
+            "Montserrat Regular": "/Users/Rolf/Library/Fonts/Montserrat-Regular.otf",
+            "Montserrat Bold": "/Users/Rolf/Library/Fonts/Montserrat-Bold.otf",
+            "Montserrat Medium": "/Users/Rolf/Library/Fonts/Montserrat-Medium.otf",
+            "Montserrat Light": "/Users/Rolf/Library/Fonts/Montserrat-Light.otf",
+            "FiraSans Regular": "/Users/Rolf/Library/Fonts/FiraSans-Regular.otf",
+            "FiraSans Medium": "/Users/Rolf/Library/Fonts/FiraSans-Medium.otf",
+            "FiraSans Light": "/Users/Rolf/Library/Fonts/FiraSans-Light.otf"
+        },
+        "header_fonts": ["Montserrat Light", "Montserrat Bold", "Montserrat Medium", "Montserrat Regular"],
+        "body_fonts": ["FiraSans Regular", "FiraSans Medium", "FiraSans Light"]
+    }
 }
