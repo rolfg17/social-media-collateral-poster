@@ -190,8 +190,36 @@ def create_text_image(text, width=700, height=700, font_size=40, config=None):
         line_spacing = font_size * 1.2
         return total_lines * line_spacing, font
     
-    # Create a new image with a white background
-    img = Image.new('RGB', (width, height), (248, 248, 248))
+    # Create a new image with a white background or use background image from config
+    if config and 'background_image_path' in config:
+        bg_path = Path(__file__).parent / config['background_image_path']
+        if bg_path.exists():
+            try:
+                bg_img = Image.open(bg_path)
+                # Resize to maintain aspect ratio and cover the required dimensions
+                bg_ratio = bg_img.width / bg_img.height
+                target_ratio = width / height
+                
+                if bg_ratio > target_ratio:  # Image is wider than needed
+                    new_width = int(height * bg_ratio)
+                    bg_img = bg_img.resize((new_width, height))
+                    left = (new_width - width) // 2
+                    bg_img = bg_img.crop((left, 0, left + width, height))
+                else:  # Image is taller than needed
+                    new_height = int(width / bg_ratio)
+                    bg_img = bg_img.resize((width, new_height))
+                    top = (new_height - height) // 2
+                    bg_img = bg_img.crop((0, top, width, top + height))
+                
+                img = bg_img.convert('RGB')
+            except Exception as e:
+                logger.error(f"Error loading background image: {e}")
+                img = Image.new('RGB', (width, height), (248, 248, 248))
+        else:
+            img = Image.new('RGB', (width, height), (248, 248, 248))
+    else:
+        img = Image.new('RGB', (width, height), (248, 248, 248))
+    
     draw = ImageDraw.Draw(img)
 
     # Load fonts
@@ -349,17 +377,53 @@ def create_text_image(text, width=700, height=700, font_size=40, config=None):
 def save_to_photos(image_paths):
     """Save images to Photos app using AppleScript"""
     success = True
+    results = []
+    
     for path in image_paths:
+        if not Path(path).exists():
+            logger.error(f"Image file not found: {path}")
+            results.append(f"❌ Failed: File not found - {path}")
+            success = False
+            continue
+            
         apple_script = f'''
         tell application "Photos"
             activate
-            import POSIX file "{path}"
+            delay 1
+            try
+                import POSIX file "{path}"
+                return "Success"
+            on error errMsg
+                return "Error: " & errMsg
+            end try
         end tell
         '''
+        
         try:
-            subprocess.run(["osascript", "-e", apple_script], check=True)
-        except subprocess.CalledProcessError:
+            result = subprocess.run(
+                ["osascript", "-e", apple_script], 
+                capture_output=True, 
+                text=True, 
+                check=False
+            )
+            
+            if result.returncode == 0:
+                logger.info(f"Successfully imported {path}")
+                results.append(f"✅ Success: {path}")
+            else:
+                logger.error(f"Error importing {path}: {result.stderr}")
+                results.append(f"❌ Failed: {result.stderr} - {path}")
+                success = False
+        except Exception as e:
+            logger.error(f"Exception while importing {path}: {str(e)}")
+            results.append(f"❌ Failed: {str(e)} - {path}")
             success = False
+    
+    # Show results in Streamlit
+    if results:
+        st.session_state.import_results = results
+        st.experimental_rerun()
+            
     return success
 
 def update_selection(title):
@@ -380,6 +444,8 @@ def main():
         st.session_state.selected_images = {}
     if 'select_all' not in st.session_state:
         st.session_state.select_all = False
+    if 'import_results' not in st.session_state:
+        st.session_state.import_results = None
     
     # Title in main area
     st.title("Social Media Collateral Images")
@@ -387,7 +453,20 @@ def main():
     # Add file uploader
     uploaded_file = st.file_uploader("Choose a markdown file", type=['md'], help="Upload a markdown file with sections to process")
     
-    # Sidebar
+    # Status area for import results
+    if st.session_state.import_results:
+        with st.expander("Export Results", expanded=True):
+            success_count = sum(1 for result in st.session_state.import_results if result.startswith('✅'))
+            failure_count = len(st.session_state.import_results) - success_count
+            st.write(f"✅ {success_count} successful exports, ❌ {failure_count} failed exports")
+        
+                
+            # Add a button to clear the results
+            if st.button("Clear Results"):
+                st.session_state.import_results = None
+                st.experimental_rerun()
+    
+    # Sidebars
     st.sidebar.title("Settings")
     
     # Create a sidebar for controls
