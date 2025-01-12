@@ -375,76 +375,23 @@ def main():
     with open('config.json', 'r') as f:
         config = json.load(f)
     
-    # Sidebar
-    st.sidebar.title("Settings")
-    
-    # Font settings in sidebar
-    st.sidebar.subheader("Font Settings")
-    
-    # Get font configurations from config
-    font_paths = config['fonts']['paths']
-    header_fonts = config['fonts']['header_fonts']
-    body_fonts = config['fonts']['body_fonts']
-    
-    header_font = st.sidebar.selectbox(
-        "Header/Footer Font",
-        header_fonts,
-        index=0
-    )
-    
-    body_font = st.sidebar.selectbox(
-        "Body Font",
-        body_fonts,
-        index=0
-    )
-    
-    # Store font paths in session state
-    st.session_state.header_font_path = font_paths[header_font]
-    st.session_state.body_font_path = font_paths[body_font]
-    
-    # Add header override setting
-    st.sidebar.subheader("Header Settings")
-    header_override = st.sidebar.text_input("Override Header", value="", help="Leave empty to use header from config")
-    
-    # Create a copy of config to avoid modifying the original
-    image_config = config.copy()
-    
-    # Update config with header override if provided
-    if header_override:
-        image_config['header'] = header_override
-    
-    # Title in main area
-    st.title("Social Media Collateral Images")
-    
     # Initialize session state
     if 'selected_images' not in st.session_state:
         st.session_state.selected_images = {}
     if 'select_all' not in st.session_state:
         st.session_state.select_all = False
     
-    # Load configuration
-    config = load_config()
+    # Title in main area
+    st.title("Social Media Collateral Images")
     
     # Add file uploader
     uploaded_file = st.file_uploader("Choose a markdown file", type=['md'], help="Upload a markdown file with sections to process")
     
+    # Sidebar
+    st.sidebar.title("Settings")
+    
     # Create a sidebar for controls
     with st.sidebar:
-        st.markdown("### Controls")
-        
-        # Show current file being processed
-        if uploaded_file:
-            st.info(f"Processing uploaded file: {uploaded_file.name}")
-        else:
-            vault_path = Path(config['obsidian_vault_path'])
-            input_filename = Path(config['input_file_path']).stem
-            collateral_files = list(vault_path.glob(f"{input_filename}-collaterals*.md"))
-            if collateral_files:
-                latest_file = max(collateral_files, key=lambda x: x.stat().st_mtime)
-                st.info(f"Processing file: {latest_file.name}")
-                st.caption(f"Full path: {latest_file}")
-            else:
-                st.warning("No collateral files found")
         
         # Add select all checkbox in sidebar (always visible)
         if st.checkbox("Select All Images", key="select_all_checkbox", value=st.session_state.select_all):
@@ -467,6 +414,58 @@ def main():
                     st.success(f"Successfully saved {len(selected_paths)} image(s) to Photos!")
                 else:
                     st.error("Failed to save images to Photos. Please make sure Photos app is accessible.")
+        
+        # Add header override setting
+        st.sidebar.subheader("Header Settings")
+        header_override = st.sidebar.text_input("Override Header", value="", help="Leave empty to use header from config")
+        
+        # Font settings in sidebar
+        st.sidebar.subheader("Font Settings")
+        
+        # Get font configurations from config
+        font_paths = config['fonts']['paths']
+        header_fonts = config['fonts']['header_fonts']
+        body_fonts = config['fonts']['body_fonts']
+        
+        header_font = st.sidebar.selectbox(
+            "Header/Footer Font",
+            header_fonts,
+            index=0
+        )
+        
+        body_font = st.sidebar.selectbox(
+            "Body Font",
+            body_fonts,
+            index=0
+        )
+        
+        # Store font paths in session state
+        st.session_state.header_font_path = font_paths[header_font]
+        st.session_state.body_font_path = font_paths[body_font]
+        
+        # Show current file being processed
+        if uploaded_file:
+            st.info(f"Processing uploaded file: {uploaded_file.name}")
+        else:
+            vault_path = Path(config['obsidian_vault_path'])
+            input_filename = Path(config['input_file_path']).stem
+            collateral_files = list(vault_path.glob(f"{input_filename}-collaterals*.md"))
+            if collateral_files:
+                latest_file = max(collateral_files, key=lambda x: x.stat().st_mtime)
+                st.info(f"Processing file: {latest_file.name}")
+                st.caption(f"Full path: {latest_file}")
+            else:
+                st.warning("No collateral files found")
+    
+    # Create a copy of config to avoid modifying the original
+    image_config = config.copy()
+    
+    # Update config with header override if provided
+    if header_override:
+        image_config['header'] = header_override
+    
+    # Load configuration
+    config = load_config()
     
     # Find the latest collaterals file from config if no file is uploaded
     if uploaded_file is None:
