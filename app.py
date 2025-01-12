@@ -460,7 +460,6 @@ def main():
             failure_count = len(st.session_state.import_results) - success_count
             st.write(f"✅ {success_count} successful exports, ❌ {failure_count} failed exports")
         
-                
             # Add a button to clear the results
             if st.button("Clear Results"):
                 st.session_state.import_results = None
