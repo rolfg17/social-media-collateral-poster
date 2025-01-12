@@ -2,39 +2,32 @@ import json
 import os
 from pathlib import Path
 import openai
+import httpx
+import tempfile
+import logging
 
-def load_config():
-    with open('config.json', 'r') as f:
-        return json.load(f)
+logger = logging.getLogger(__name__)
 
-def extract_prompt_and_content(file_path):
+def extract_prompt_and_content(content):
     """
-    Extracts the main content and prompt from a given markdown file
-    
-    The function reads the file, splits it into sections and finds the section
-    starting with '# Prompt'. It then extracts the prompt from this section
-    and returns it along with the main content, which is the remaining sections
-    concatenated back together.
+    Extracts the main content and prompt from markdown content
     
     Args:
-        file_path (str): Path to the markdown file
+        content (str): The markdown content as a string
     
     Returns:
         tuple: A tuple containing the main content and the prompt
     """
-    with open(file_path, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
     # Split the content into sections
     sections = content.split('# ')
     
-    # Find the Collaterals section
+    # Find the Prompt section
     main_content = ''
     prompt = ''
     
     for section in sections:
         if section.startswith('Prompt'):
-            # Extract prompt from Collaterals section
+            # Extract prompt from Prompt section
             prompt = section[len('Prompt'):].strip()
         else:
             # Add other sections to main content
@@ -42,12 +35,12 @@ def extract_prompt_and_content(file_path):
                 main_content += '# ' + section if main_content else section
     
     if not prompt:
-        raise ValueError("No '# Prompt' section found in the file")
+        raise ValueError("No '# Prompt' section found in the content")
     
     return main_content.strip(), prompt
 
 def generate_chatgpt_response(content, prompt, api_key):
-    import httpx
+    """Generate collaterals using ChatGPT"""
     client = openai.OpenAI(
         api_key=api_key,
         http_client=httpx.Client()
@@ -77,19 +70,49 @@ Example format:
         {"role": "user", "content": content}
     ]
     
-    response = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=messages
-    )
-    
-    # Ensure response starts with # Collaterals
-    response_text = response.choices[0].message.content
-    if not response_text.strip().startswith("# Collaterals"):
-        response_text = "# Collaterals\n\n" + response_text
-    
-    return response_text
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=messages
+        )
+        
+        # Ensure response starts with # Collaterals
+        response_text = response.choices[0].message.content
+        if not response_text.strip().startswith("# Collaterals"):
+            response_text = "# Collaterals\n\n" + response_text
+        
+        return response_text
+    except Exception as e:
+        logger.error(f"Error generating collaterals: {str(e)}")
+        raise
 
-def save_response(response, input_file_path, vault_path):
+def process_and_save_collaterals(content, config):
+    """
+    Process markdown content and generate collaterals
+    
+    Args:
+        content (str): The markdown content containing the newsletter and prompt
+        config (dict): Configuration dictionary with API key
+    
+    Returns:
+        str: Generated collaterals content
+    """
+    try:
+        # Extract content and prompt
+        main_content, prompt = extract_prompt_and_content(content)
+        
+        # Generate collaterals
+        api_key = config['openai_api_key']
+        response = generate_chatgpt_response(main_content, prompt, api_key)
+        
+        return response
+            
+    except Exception as e:
+        logger.error(f"Error processing collaterals: {str(e)}")
+        raise
+
+def save_to_vault(response, input_file_path, vault_path):
+    """Save the generated collaterals to the Obsidian vault"""
     # Get the original filename without extension
     input_filename = Path(input_file_path).stem
     
@@ -138,26 +161,5 @@ def save_response(response, input_file_path, vault_path):
     # Write the response with the backlink and fixed format
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(backlink + '\n'.join(fixed_lines))
-
-def main():
-    # Load configuration
-    config = load_config()
-    
-    # Extract paths and API key
-    vault_path = config['obsidian_vault_path']
-    input_file_path = config['input_file_path']
-    api_key = config['openai_api_key']
-    
-    # Process the input file
-    content, prompt = extract_prompt_and_content(input_file_path)
-    
-    # Generate response from ChatGPT
-    response = generate_chatgpt_response(content, prompt, api_key)
-    
-    # Save the response
-    save_response(response, input_file_path, vault_path)
-    
-    print(f"Collaterals generated and saved successfully!")
-
-if __name__ == "__main__":
-    main()
+        
+    return output_path

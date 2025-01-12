@@ -432,12 +432,61 @@ def update_selection(title):
     if not st.session_state[f"checkbox_{title}"] and st.session_state.select_all:
         st.session_state.select_all = False
 
+def handle_file_upload(uploaded_file, config):
+    """Handle file upload and collateral generation"""
+    try:
+        # Read the content
+        content = uploaded_file.read().decode()
+        
+        # Check if this is a newsletter file (has # Prompt section)
+        if "# Prompt" in content:
+            with st.spinner("Generating collaterals from newsletter..."):
+                from collateral_generator import process_and_save_collaterals, save_to_vault
+                try:
+                    # Generate collaterals
+                    collateral_content = process_and_save_collaterals(content, config)
+                    
+                    # Save to vault
+                    vault_path = config['obsidian_vault_path']
+                    saved_path = save_to_vault(
+                        collateral_content, 
+                        uploaded_file.name, 
+                        vault_path
+                    )
+                    
+                    # Create Obsidian URL
+                    # Convert the absolute path to a relative vault path
+                    vault_path = Path(vault_path)
+                    relative_path = saved_path.relative_to(vault_path)
+                    obsidian_url = f"obsidian://open?vault={vault_path.name}&file={relative_path}"
+                    
+                    # Show success message with link
+                    st.markdown(
+                        f"✅ Successfully generated and saved collaterals to: "
+                        f'<a href="{obsidian_url}" target="_blank">{saved_path.name}</a>', 
+                        unsafe_allow_html=True
+                    )
+                    
+                    # Return the generated content for image processing
+                    return collateral_content
+                    
+                except Exception as e:
+                    st.error(f"Error generating collaterals: {str(e)}")
+                    return None
+        elif "# Collaterals" in content:
+            # This is already a collaterals file, return it directly
+            return content
+        else:
+            st.error("File must contain either '# Prompt' or '# Collaterals' section")
+            return None
+        
+    except Exception as e:
+        st.error(f"Error processing file: {str(e)}")
+        return None
+
 def main():
+    """Main application function"""
     st.set_page_config(page_title="Social Media Collateral Generator", layout="wide")
-    
-    # Load config
-    with open('config.json', 'r') as f:
-        config = json.load(f)
     
     # Initialize session state
     if 'selected_images' not in st.session_state:
@@ -447,11 +496,24 @@ def main():
     if 'import_results' not in st.session_state:
         st.session_state.import_results = None
     
+    # Load config
+    config = load_config()
+    
+    # Initialize fonts in session state
+    if 'header_font_path' not in st.session_state:
+        st.session_state.header_font_path = config['fonts']['paths']['Montserrat Light']
+    if 'body_font_path' not in st.session_state:
+        st.session_state.body_font_path = config['fonts']['paths']['FiraSans Regular']
+    
     # Title in main area
     st.title("Social Media Collateral Images")
     
-    # Add file uploader
-    uploaded_file = st.file_uploader("Choose a markdown file", type=['md'], help="Upload a markdown file with sections to process")
+    # Add file uploader with updated help text
+    uploaded_file = st.file_uploader(
+        "Choose a markdown file", 
+        type=['md'], 
+        help="Upload either a newsletter file with a # Prompt section or a pre-generated collaterals file"
+    )
     
     # Status area for import results
     if st.session_state.import_results:
@@ -470,7 +532,6 @@ def main():
     
     # Create a sidebar for controls
     with st.sidebar:
-        
         # Add select all checkbox in sidebar (always visible)
         if st.checkbox("Select All Images", key="select_all_checkbox", value=st.session_state.select_all):
             st.session_state.select_all = True
@@ -520,20 +581,6 @@ def main():
         # Store font paths in session state
         st.session_state.header_font_path = font_paths[header_font]
         st.session_state.body_font_path = font_paths[body_font]
-        
-        # Show current file being processed
-        if uploaded_file:
-            st.info(f"Processing uploaded file: {uploaded_file.name}")
-        else:
-            vault_path = Path(config['obsidian_vault_path'])
-            input_filename = Path(config['input_file_path']).stem
-            collateral_files = list(vault_path.glob(f"{input_filename}-collaterals*.md"))
-            if collateral_files:
-                latest_file = max(collateral_files, key=lambda x: x.stat().st_mtime)
-                st.info(f"Processing file: {latest_file.name}")
-                st.caption(f"Full path: {latest_file}")
-            else:
-                st.warning("No collateral files found")
     
     # Create a copy of config to avoid modifying the original
     image_config = config.copy()
@@ -542,30 +589,19 @@ def main():
     if header_override:
         image_config['header'] = header_override
     
-    # Load configuration
-    config = load_config()
+    # Handle file upload and image generation
+    current_file = uploaded_file if uploaded_file is not None else st.session_state.get('file_uploader')
     
-    # Find the latest collaterals file from config if no file is uploaded
-    if uploaded_file is None:
-        vault_path = Path(config['obsidian_vault_path'])
-        input_filename = Path(config['input_file_path']).stem
-        collateral_files = list(vault_path.glob(f"{input_filename}-collaterals*.md"))
+    if current_file:
+        st.info(f"Processing file: {current_file.name}")
+        content = handle_file_upload(current_file, image_config)
         
-        if not collateral_files:
-            st.error("No collateral files found in vault")
-            return
-        
-        latest_file = max(collateral_files, key=lambda x: x.stat().st_mtime)
-        with open(latest_file, 'r') as f:
-            content = f.read()
-    else:
-        content = uploaded_file.getvalue().decode('utf-8')
-    
-    # Parse markdown content
-    sections = parse_markdown_content(content, config)
-    
-    if not sections:
-        st.error("""No valid sections found in the markdown file. Please ensure your file follows this structure:
+        if content:
+            # Parse markdown content
+            sections = parse_markdown_content(content, image_config)
+            
+            if not sections:
+                st.error("""No valid sections found in the markdown file. Please ensure your file follows this structure:
 
 ```markdown
 # Collaterals
@@ -581,111 +617,159 @@ Note:
 - Each section must start with '## ' (level 2 header)
 - Content must be placed under each section header
 """)
-        return
-    
-    # Process images in pairs
-    sections_items = [(title, content) for title, content in sections.items() if content.strip()]
-    temp_image_paths = []
-    
-    for i in range(0, len(sections_items), 2):
-        # Create a row for each pair of images
-        col1, col2 = st.columns(2)
-        
-        # Process first image in the pair
-        title, content = sections_items[i]
-        with col1:
-            st.subheader(title)
-            # Clean the text before creating the image
-            cleaned_content = clean_text_for_image(content)
-            image = create_text_image(cleaned_content, config=image_config)
+                return{{ ... }}
             
-            # Save image to temporary file
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                image.save(tmp.name)
-                temp_image_paths.append((title, tmp.name))
+            # Process images in pairs
+            sections_items = [(title, content) for title, content in sections.items() if content.strip()]
+            temp_image_paths = []
             
-            # Initialize this image's state if not present
-            if title not in st.session_state.selected_images:
-                st.session_state.selected_images[title] = st.session_state.select_all
+            for i in range(0, len(sections_items), 2):
+                # Create a row for each pair of images
+                col1, col2 = st.columns(2)
+                
+                # Process first image in the pair
+                title, content = sections_items[i]
+                with col1:
+                    st.subheader(title)
+                    # Clean the text before creating the image
+                    cleaned_content = clean_text_for_image(content)
+                    image = create_text_image(cleaned_content, config=image_config)
+                    
+                    # Save image to temporary file
+                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                        image.save(tmp.name)
+                        temp_image_paths.append((title, tmp.name))
+                    
+                    # Initialize this image's state if not present
+                    if title not in st.session_state.selected_images:
+                        st.session_state.selected_images[title] = st.session_state.select_all
+                    
+                    # Create checkbox and image container
+                    check_col, img_col = st.columns([1, 10])
+                    
+                    # Checkbox
+                    with check_col:
+                        st.checkbox(
+                            "Select image",
+                            key=f"checkbox_{title}",
+                            value=st.session_state.selected_images.get(title, False),
+                            on_change=update_selection,
+                            args=(title,),
+                            label_visibility="collapsed"
+                        )
+                    
+                    # Image
+                    with img_col:
+                        st.image(tmp.name, use_column_width=True)
+                    
+                    # Show the cleaned text for debugging
+                    with st.expander("Show cleaned text"):
+                        st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
+                
+                # Process second image in the pair (if it exists)
+                if i + 1 < len(sections_items):
+                    title, content = sections_items[i + 1]
+                    with col2:
+                        st.subheader(title)
+                        # Clean the text before creating the image
+                        cleaned_content = clean_text_for_image(content)
+                        image = create_text_image(cleaned_content, config=image_config)
+                        
+                        # Save image to temporary file
+                        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                            image.save(tmp.name)
+                            temp_image_paths.append((title, tmp.name))
+                        
+                        # Initialize this image's state if not present
+                        if title not in st.session_state.selected_images:
+                            st.session_state.selected_images[title] = st.session_state.select_all
+                        
+                        # Create checkbox and image container
+                        check_col, img_col = st.columns([1, 10])
+                        
+                        # Checkbox
+                        with check_col:
+                            st.checkbox(
+                                "Select image",
+                                key=f"checkbox_{title}",
+                                value=st.session_state.selected_images.get(title, False),
+                                on_change=update_selection,
+                                args=(title,),
+                                label_visibility="collapsed"
+                            )
+                        
+                        # Image
+                        with img_col:
+                            st.image(tmp.name, use_column_width=True)
+                        
+                        # Show the cleaned text for debugging
+                        with st.expander("Show cleaned text"):
+                            st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
+                
+                st.markdown("---")
             
-            # Create checkbox and image container
-            check_col, img_col = st.columns([1, 10])
+            # Store temp_image_paths in session state for the sidebar button
+            st.session_state.temp_image_paths = temp_image_paths
             
-            # Checkbox
-            with check_col:
-                st.checkbox(
-                    "Select image",
-                    key=f"checkbox_{title}",
-                    value=st.session_state.selected_images.get(title, False),
-                    on_change=update_selection,
-                    args=(title,),
-                    label_visibility="collapsed"
-                )
+            # Cleanup temporary files when the app is closed
+            def cleanup():
+                for _, path in temp_image_paths:
+                    try:
+                        os.unlink(path)
+                    except:
+                        pass
             
-            # Image
-            with img_col:
-                st.image(tmp.name, use_column_width=True)
-            
-            # Show the cleaned text for debugging
-            with st.expander("Show cleaned text"):
-                st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
-        
-        # Process second image in the pair (if it exists)
-        if i + 1 < len(sections_items):
-            title, content = sections_items[i + 1]
-            with col2:
-                st.subheader(title)
-                # Clean the text before creating the image
-                cleaned_content = clean_text_for_image(content)
-                image = create_text_image(cleaned_content, config=image_config)
-                
-                # Save image to temporary file
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                    image.save(tmp.name)
-                    temp_image_paths.append((title, tmp.name))
-                
-                # Initialize this image's state if not present
-                if title not in st.session_state.selected_images:
-                    st.session_state.selected_images[title] = st.session_state.select_all
-                
-                # Create checkbox and image container
-                check_col, img_col = st.columns([1, 10])
-                
-                # Checkbox
-                with check_col:
-                    st.checkbox(
-                        "Select image",
-                        key=f"checkbox_{title}",
-                        value=st.session_state.selected_images.get(title, False),
-                        on_change=update_selection,
-                        args=(title,),
-                        label_visibility="collapsed"
-                    )
-                
-                # Image
-                with img_col:
-                    st.image(tmp.name, use_column_width=True)
-                
-                # Show the cleaned text for debugging
-                with st.expander("Show cleaned text"):
-                    st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
-        
-        st.markdown("---")
-    
-    # Store temp_image_paths in session state for the sidebar button
-    st.session_state.temp_image_paths = temp_image_paths
-    
-    # Cleanup temporary files when the app is closed
-    def cleanup():
-        for _, path in temp_image_paths:
-            try:
-                os.unlink(path)
-            except:
-                pass
-    
-    # Register cleanup function
-    import atexit
-    atexit.register(cleanup)
+            # Register cleanup function
+            import atexit
+            atexit.register(cleanup)
 
 if __name__ == "__main__":
+    import sys
+    import argparse
+    from pathlib import Path
+    import logging
+    
+    # Set up logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+    
+    logger.info("Starting application...")
+    logger.info(f"Command line arguments: {sys.argv}")
+    
+    parser = argparse.ArgumentParser(description='Social Media Collateral Generator')
+    parser.add_argument('--file', type=str, help='Path to markdown file to process')
+    args = parser.parse_args()
+    
+    logger.info(f"Parsed arguments: {args}")
+    
+    # Debug logging
+    if args.file:
+        # Clean up any potential escaping in the path
+        clean_path = args.file.replace('\\', '')
+        file_path = Path(clean_path)
+        logger.info(f"Processing file: {file_path}")
+        logger.info(f"File exists: {file_path.exists()}")
+        if file_path.exists():
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    logger.info(f"Successfully read file, first 100 chars: {content[:100]}")
+                    # Create a mock uploaded file
+                    from types import SimpleNamespace
+                    mock_file = SimpleNamespace(
+                        name=file_path.name,
+                        read=lambda: content.encode('utf-8')
+                    )
+                    st.session_state.file_uploader = mock_file
+                    logger.info("File loaded into session state")
+            except Exception as e:
+                logger.error(f"Error reading file: {e}")
+        else:
+            logger.error(f"File does not exist: {file_path}")
+    else:
+        logger.info("No file argument provided")
+    
+    # Initialize the app
+    logger.info("Initializing main app...")
     main()
+    logger.info("Main app initialized")
