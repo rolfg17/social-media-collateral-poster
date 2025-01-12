@@ -1,0 +1,20 @@
+{
+    "python.defaultInterpreterPath": "/opt/anaconda3/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.indexing": true,
+    "python.analysis.packageIndexDepths": [
+        {
+            "name": "streamlit",
+            "depth": 5
+        },
+        {
+            "name": "PIL",
+            "depth": 3
+        }
+    ],
+    "terminal.integrated.env.osx": {
+        "PYTHONPATH": "/opt/anaconda3/bin/python"
+    }
+}
