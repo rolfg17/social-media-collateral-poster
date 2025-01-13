@@ -9,15 +9,25 @@ import os
 import re
 import tempfile
 import logging
+from dotenv import load_dotenv
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def load_config():
+    # Load environment variables
+    load_dotenv()
+    
     config_path = Path(__file__).parent / 'config.json'
     with open(config_path, 'r') as f:
-        return json.load(f)
+        config = json.load(f)
+    
+    # Override API key with environment variable if present
+    if os.getenv('OPENAI_API_KEY'):
+        config['openai_api_key'] = os.getenv('OPENAI_API_KEY')
+    
+    return config
 
 def clean_text_for_image(text):
     # Remove markdown links - replace [text](url) with just text
