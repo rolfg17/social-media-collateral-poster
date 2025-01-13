@@ -10,6 +10,7 @@ import re
 import tempfile
 import logging
 from dotenv import load_dotenv
+from image_processor import create_text_image, get_emoji_image  # Import from image_processor
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -184,219 +185,6 @@ def get_emoji_image(emoji_char, size):
         return img
     except:
         return None
-
-def create_text_image(text, width=700, height=700, font_size=40, config=None):
-    def calculate_text_height(text, font_size, width, draw):
-        try:
-            # Use selected body font
-            font = ImageFont.truetype(st.session_state.body_font_path, font_size)
-        except:
-            try:
-                # Fallback to Helvetica if selected font is not available
-                font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
-            except:
-                font = ImageFont.load_default()
-            
-        # Calculate max chars per line
-        avg_char_width = sum(draw.textlength(char, font=font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
-        max_chars = int((width * 0.9) / avg_char_width)
-        
-        # Process text and count lines
-        paragraphs = text.split('\n\n')
-        total_lines = 0
-        
-        for paragraph in paragraphs:
-            wrapped_text = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars)
-            total_lines += len(wrapped_text.split('\n'))
-            if len(paragraphs) > 1:
-                total_lines += 1  # Add space between paragraphs
-                
-        line_spacing = font_size * 1.2
-        return total_lines * line_spacing, font
-    
-    # Create a new image with a white background or use background image from config
-    if config and 'background_image_path' in config:
-        bg_path = Path(__file__).parent / config['background_image_path']
-        if bg_path.exists():
-            try:
-                bg_img = Image.open(bg_path)
-                # Resize to maintain aspect ratio and cover the required dimensions
-                bg_ratio = bg_img.width / bg_img.height
-                target_ratio = width / height
-                
-                if bg_ratio > target_ratio:  # Image is wider than needed
-                    new_width = int(height * bg_ratio)
-                    bg_img = bg_img.resize((new_width, height))
-                    left = (new_width - width) // 2
-                    bg_img = bg_img.crop((left, 0, left + width, height))
-                else:  # Image is taller than needed
-                    new_height = int(width / bg_ratio)
-                    bg_img = bg_img.resize((width, new_height))
-                    top = (new_height - height) // 2
-                    bg_img = bg_img.crop((0, top, width, top + height))
-                
-                img = bg_img.convert('RGB')
-            except Exception as e:
-                logger.error(f"Error loading background image: {e}")
-                img = Image.new('RGB', (width, height), (248, 248, 248))
-        else:
-            img = Image.new('RGB', (width, height), (248, 248, 248))
-    else:
-        img = Image.new('RGB', (width, height), (248, 248, 248))
-    
-    draw = ImageDraw.Draw(img)
-
-    # Load fonts
-    try:
-        # Header/footer font size is 60% of body text, but minimum 16pt
-        header_font_size = max(int(font_size * 0.6), 16)
-        header_font = ImageFont.truetype(st.session_state.header_font_path, header_font_size)
-        body_font = ImageFont.truetype(st.session_state.body_font_path, font_size)
-    except:
-        try:
-            header_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", header_font_size)
-            body_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", font_size)
-        except:
-            header_font = body_font = ImageFont.load_default()
-
-    # Get header and footer from config
-    header = config.get('header', '') if config else ''
-    footer = config.get('footer', '') if config else ''
-
-    # Calculate positions
-    margin = height * 0.05  # 5% margin for both header and footer
-    
-    if header:
-        header_bbox = draw.textbbox((0, 0), header, font=header_font)
-        header_height = header_bbox[3] - header_bbox[1]
-        header_width = draw.textlength(header, font=header_font)
-        header_x = (width - header_width) // 2
-        header_y = margin  # 5% from top
-        draw.text((header_x, header_y), header, font=header_font, fill='#444444')
-        start_y = header_y + header_height + margin  # Add margin padding
-    else:
-        start_y = margin * 2  # Double margin if no header
-
-    # Calculate footer position and height
-    if footer:
-        footer_bbox = draw.textbbox((0, 0), footer, font=header_font)
-        footer_height = footer_bbox[3] - footer_bbox[1]
-        footer_width = draw.textlength(footer, font=header_font)
-        footer_x = (width - footer_width) // 2
-        footer_y = height - margin - footer_height  # 5% from bottom
-        end_y = footer_y - margin  # Add margin padding
-        draw.text((footer_x, footer_y), footer, font=header_font, fill='#444444')
-    else:
-        end_y = height - (margin * 2)  # Double margin if no footer
-
-    # Calculate available height for main text
-    available_height = end_y - start_y
-
-    # Find the right font size
-    while font_size > 20:  # Don't go smaller than 20pt
-        text_height, font = calculate_text_height(text, font_size, width, draw)
-        if text_height <= available_height:
-            break
-        font_size -= 2
-    
-    # Calculate maximum characters per line based on average character width
-    avg_char_width = sum(draw.textlength(char, font=font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
-    max_chars = int((width * 0.9) / avg_char_width)
-    
-    # Process the text paragraph by paragraph
-    paragraphs = text.split('\n\n')
-    processed_paragraphs = []
-    
-    for paragraph in paragraphs:
-        # Check if this is a list (contains numbered items)
-        if re.search(r'^\d+\.', paragraph, re.MULTILINE):
-            # For lists, preserve line breaks
-            lines = paragraph.split('\n')
-            for line in lines:
-                # Process each line for emojis
-                current_line = []
-                current_word = ""
-                
-                for char in line:
-                    if emoji.is_emoji(char):
-                        if current_word:
-                            current_line.append(("text", current_word))
-                            current_word = ""
-                        current_line.append(("emoji", char))
-                    else:
-                        current_word += char
-                
-                if current_word:
-                    current_line.append(("text", current_word))
-                
-                processed_paragraphs.append(current_line)
-        else:
-            # For regular paragraphs, wrap text normally
-            wrapped_text = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars)
-            
-            # Process each line for emojis
-            for line in wrapped_text.split('\n'):
-                current_line = []
-                current_word = ""
-                
-                for char in line:
-                    if emoji.is_emoji(char):
-                        if current_word:
-                            current_line.append(("text", current_word))
-                            current_word = ""
-                        current_line.append(("emoji", char))
-                    else:
-                        current_word += char
-                
-                if current_word:
-                    current_line.append(("text", current_word))
-                
-                processed_paragraphs.append(current_line)
-        
-        # Add an empty line between paragraphs
-        if len(paragraphs) > 1:
-            processed_paragraphs.append([])
-    
-    # Remove last empty line if it exists
-    if processed_paragraphs and not processed_paragraphs[-1]:
-        processed_paragraphs.pop()
-    
-    # Calculate total height and starting y position for main text
-    line_spacing = font_size * 1.2
-    total_height = len(processed_paragraphs) * line_spacing
-    
-    # Center the text between header and footer
-    y = start_y + (available_height - total_height) / 2
-    
-    # Draw each line
-    for line in processed_paragraphs:
-        if not line:  # Empty line for paragraph separation
-            y += line_spacing
-            continue
-            
-        # Calculate x position to center this line
-        line_width = sum(
-            draw.textlength(word + " ", font=body_font) if word_type == "text"
-            else font_size * 1.2  # emoji width
-            for word_type, word in line
-        )
-        x = (width - line_width) / 2
-        
-        # Draw each word/emoji in the line
-        for word_type, word in line:
-            if word_type == "text":
-                draw.text((x, y), word + " ", fill='black', font=body_font)
-                x += draw.textlength(word + " ", font=body_font)
-            else:  # emoji
-                emoji_img = get_emoji_image(word, font_size)
-                if emoji_img:
-                    # Paste emoji with transparency
-                    img.paste(emoji_img, (int(x), int(y)), emoji_img)
-                x += font_size * 1.2
-        
-        y += line_spacing
-    
-    return img
 
 def save_to_photos(image_paths):
     """Save images to Photos app using AppleScript"""
@@ -616,14 +404,18 @@ def main():
     # Handle file upload and image generation
     current_file = uploaded_file if uploaded_file is not None else st.session_state.get('file_uploader')
     
-    # Check if we need to reprocess content
-    should_reprocess = (
-        current_file and (
+    # Check if we need to reprocess content by comparing content hash
+    should_reprocess = False
+    if current_file:
+        current_content = current_file.read()
+        current_file.seek(0)  # Reset file pointer after reading
+        content_hash = hash(current_content)
+        
+        should_reprocess = (
             'processed_sections' not in st.session_state or  # First time processing
-            'last_file' not in st.session_state or  # New file
-            st.session_state.last_file != current_file.name  # File changed
+            'last_content_hash' not in st.session_state or  # No hash stored
+            st.session_state.last_content_hash != content_hash  # Content changed
         )
-    )
     
     if current_file:
         st.info(f"Processing file: {current_file.name}")
@@ -635,14 +427,14 @@ def main():
                 # Parse and clean content
                 sections = parse_markdown_content(content, image_config)
                 if sections:
-                    # Cache the processed content
+                    # Cache the processed content and content hash
                     st.session_state.processed_sections = sections
                     st.session_state.cleaned_contents = {
                         title: clean_text_for_image(content) 
                         for title, content in sections.items() 
                         if content.strip()
                     }
-                    st.session_state.last_file = current_file.name
+                    st.session_state.last_content_hash = content_hash
                 else:
                     st.error("""No valid sections found in the markdown file. Please ensure your file follows this structure:
 

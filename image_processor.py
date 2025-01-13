@@ -2,29 +2,42 @@ from PIL import Image, ImageDraw, ImageFont
 import textwrap
 import emoji
 import subprocess
+import re
 from io import BytesIO
 import logging
 from pathlib import Path
+import streamlit as st
+import sys
+from datetime import datetime
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def get_emoji_image(emoji_char, size):
     """Convert emoji character to PIL Image"""
     # Use emojirender to get colored emoji (if available on the system)
     try:
-        cmd = ['emojirender', emoji_char, str(size)]
-        result = subprocess.run(cmd, capture_output=True)
+        result = subprocess.run(['emojirender', emoji_char], capture_output=True, text=True)
         if result.returncode == 0:
-            img_data = BytesIO(result.stdout)
-            return Image.open(img_data)
+            # Convert SVG to PNG using ImageMagick
+            convert_result = subprocess.run(
+                ['convert', 'svg:-', 'png:-'],
+                input=result.stdout.encode(),
+                capture_output=True
+            )
+            if convert_result.returncode == 0:
+                img = Image.open(BytesIO(convert_result.stdout))
+                img = img.resize((size, size))
+                return img
     except:
         pass
     
-    # Fallback: try to use system emoji font
+    # Fallback: render emoji as text
     try:
         img = Image.new('RGBA', (size, size), (255, 255, 255, 0))
         draw = ImageDraw.Draw(img)
-        font = ImageFont.truetype('/System/Library/Fonts/Apple Color Emoji.ttc', size)
+        font = ImageFont.truetype("/System/Library/Fonts/Apple Color Emoji.ttc", size)
         bbox = draw.textbbox((0, 0), emoji_char, font=font)
         x = (size - (bbox[2] - bbox[0])) // 2
         y = (size - (bbox[3] - bbox[1])) // 2
@@ -35,7 +48,9 @@ def get_emoji_image(emoji_char, size):
 
 def create_text_image(text, width=700, height=700, font_size=40, config=None):
     """Create image with text and optional background"""
+    
     def calculate_text_height(text, font_size, width, draw):
+        
         try:
             font = ImageFont.truetype(st.session_state.body_font_path, font_size)
         except:
@@ -44,20 +59,34 @@ def create_text_image(text, width=700, height=700, font_size=40, config=None):
             except:
                 font = ImageFont.load_default()
             
-        avg_char_width = sum(draw.textlength(char, font=font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
-        max_chars = int((width * 0.9) / avg_char_width)
+        # Calculate average character width using a more representative sample
+        sample_text = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,!?"
+        total_width = draw.textlength(sample_text, font=font)
+        avg_char_width = total_width / len(sample_text)
+        max_chars = int((width * 0.85) / avg_char_width)
+        
+        logger.info(f" Max chars per line: {max_chars}")
         
         paragraphs = text.split('\n\n')
         total_lines = 0
         
         for paragraph in paragraphs:
-            wrapped_text = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars)
+            logger.info(f" Has number prefix: {bool(re.match(r'^\d+[\.\)\s]', paragraph))}")
+            
+            # Try with different textwrap options
+            normal_wrap = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars)
+            no_indent = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars, initial_indent='', subsequent_indent='')
+            
+            wrapped_text = no_indent  # Use no_indent version for now
             total_lines += len(wrapped_text.split('\n'))
             if len(paragraphs) > 1:
                 total_lines += 1
-                
-        line_spacing = font_size * 1.2
-        return total_lines * line_spacing, font
+        
+        # Calculate total height needed
+        line_height = font.size * 1.5  # Add 50% line spacing
+        total_height = total_lines * line_height
+        
+        return total_height, font
 
     # Create or load background image
     if config and 'background_image_path' in config:
@@ -142,53 +171,41 @@ def create_text_image(text, width=700, height=700, font_size=40, config=None):
         font_size -= 2
     
     # Calculate maximum characters per line
-    avg_char_width = sum(draw.textlength(char, font=font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
+    avg_char_width = sum(draw.textlength(char, font=body_font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
     max_chars = int((width * 0.9) / avg_char_width)
+    
+    logger.info(f" ---- Text Wrapping")
+    logger.info(f" Width: {width}, Avg char width: {avg_char_width:.2f}")
+    logger.info(f" Max chars per line: {max_chars}")
     
     # Process the text paragraph by paragraph
     paragraphs = text.split('\n\n')
     processed_paragraphs = []
     
     for paragraph in paragraphs:
-        if re.search(r'^\d+\.', paragraph, re.MULTILINE):
-            lines = paragraph.split('\n')
-            for line in lines:
-                current_line = []
-                current_word = ""
-                
-                for char in line:
-                    if emoji.is_emoji(char):
-                        if current_word:
-                            current_line.append(("text", current_word))
-                            current_word = ""
-                        current_line.append(("emoji", char))
-                    else:
-                        current_word += char
-                
-                if current_word:
-                    current_line.append(("text", current_word))
-                
-                processed_paragraphs.append(current_line)
-        else:
-            wrapped_text = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars)
+        
+        # Try different wrap methods
+        normal_wrap = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars)
+        no_indent = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars, initial_indent='', subsequent_indent='')
+        
+        # Process the paragraph
+        for line in normal_wrap.split('\n'):
+            current_line = []
+            current_word = ""
             
-            for line in wrapped_text.split('\n'):
-                current_line = []
-                current_word = ""
-                
-                for char in line:
-                    if emoji.is_emoji(char):
-                        if current_word:
-                            current_line.append(("text", current_word))
-                            current_word = ""
-                        current_line.append(("emoji", char))
-                    else:
-                        current_word += char
-                
-                if current_word:
-                    current_line.append(("text", current_word))
-                
-                processed_paragraphs.append(current_line)
+            for char in line:
+                if emoji.is_emoji(char):
+                    if current_word:
+                        current_line.append(("text", current_word))
+                        current_word = ""
+                    current_line.append(("emoji", char))
+                else:
+                    current_word += char
+            
+            if current_word:
+                current_line.append(("text", current_word))
+            
+            processed_paragraphs.append(current_line)
         
         if len(paragraphs) > 1:
             processed_paragraphs.append([])
