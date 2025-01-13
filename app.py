@@ -616,16 +616,35 @@ def main():
     # Handle file upload and image generation
     current_file = uploaded_file if uploaded_file is not None else st.session_state.get('file_uploader')
     
+    # Check if we need to reprocess content
+    should_reprocess = (
+        current_file and (
+            'processed_sections' not in st.session_state or  # First time processing
+            'last_file' not in st.session_state or  # New file
+            st.session_state.last_file != current_file.name  # File changed
+        )
+    )
+    
     if current_file:
         st.info(f"Processing file: {current_file.name}")
-        content = handle_file_upload(current_file, image_config)
         
-        if content:
-            # Parse markdown content
-            sections = parse_markdown_content(content, image_config)
-            
-            if not sections:
-                st.error("""No valid sections found in the markdown file. Please ensure your file follows this structure:
+        if should_reprocess:
+            # Process new content
+            content = handle_file_upload(current_file, image_config)
+            if content:
+                # Parse and clean content
+                sections = parse_markdown_content(content, image_config)
+                if sections:
+                    # Cache the processed content
+                    st.session_state.processed_sections = sections
+                    st.session_state.cleaned_contents = {
+                        title: clean_text_for_image(content) 
+                        for title, content in sections.items() 
+                        if content.strip()
+                    }
+                    st.session_state.last_file = current_file.name
+                else:
+                    st.error("""No valid sections found in the markdown file. Please ensure your file follows this structure:
 
 ```markdown
 # Collaterals
@@ -641,7 +660,12 @@ Note:
 - Each section must start with '## ' (level 2 header)
 - Content must be placed under each section header
 """)
-                return{{ ... }}
+                    return
+        
+        # Use cached content if available
+        if 'processed_sections' in st.session_state:
+            sections = st.session_state.processed_sections
+            cleaned_contents = st.session_state.cleaned_contents
             
             # Process images in pairs
             sections_items = [(title, content) for title, content in sections.items() if content.strip()]
@@ -652,11 +676,11 @@ Note:
                 col1, col2 = st.columns(2)
                 
                 # Process first image in the pair
-                title, content = sections_items[i]
+                title, _ = sections_items[i]
                 with col1:
                     st.subheader(title)
-                    # Clean the text before creating the image
-                    cleaned_content = clean_text_for_image(content)
+                    # Use cached cleaned content
+                    cleaned_content = cleaned_contents[title]
                     image = create_text_image(cleaned_content, config=image_config)
                     
                     # Save image to temporary file
@@ -692,11 +716,11 @@ Note:
                 
                 # Process second image in the pair (if it exists)
                 if i + 1 < len(sections_items):
-                    title, content = sections_items[i + 1]
+                    title, _ = sections_items[i + 1]
                     with col2:
                         st.subheader(title)
-                        # Clean the text before creating the image
-                        cleaned_content = clean_text_for_image(content)
+                        # Use cached cleaned content
+                        cleaned_content = cleaned_contents[title]
                         image = create_text_image(cleaned_content, config=image_config)
                         
                         # Save image to temporary file
@@ -729,13 +753,11 @@ Note:
                         # Show the cleaned text for debugging
                         with st.expander("Show cleaned text"):
                             st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
-                
-                st.markdown("---")
             
-            # Store temp_image_paths in session state for the sidebar button
+            # Store temporary image paths in session state
             st.session_state.temp_image_paths = temp_image_paths
             
-            # Cleanup temporary files when the app is closed
+            # Cleanup function to remove temporary files
             def cleanup():
                 for _, path in temp_image_paths:
                     try:
