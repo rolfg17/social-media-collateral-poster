@@ -16,16 +16,30 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def load_config():
-    # Load environment variables
+    # Clear any existing OpenAI environment variables to prevent using cached keys
+    if 'OPENAI_API_KEY' in os.environ:
+        del os.environ['OPENAI_API_KEY']
+    if 'OPENAI_KEY' in os.environ:  # Clear legacy env var too
+        del os.environ['OPENAI_KEY']
+    
+    # Load environment variables from .env
     load_dotenv()
     
     config_path = Path(__file__).parent / 'config.json'
     with open(config_path, 'r') as f:
         config = json.load(f)
     
-    # Override API key with environment variable if present
-    if os.getenv('OPENAI_API_KEY'):
-        config['openai_api_key'] = os.getenv('OPENAI_API_KEY')
+    # Load paths from environment variables
+    config['obsidian_vault_path'] = os.getenv('OBSIDIAN_VAULT_PATH')
+    config['input_file_path'] = os.getenv('INPUT_FILE_PATH')
+    
+    # Get API key from .env file
+    api_key = os.getenv('OPENAI_API_KEY')
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY not found in .env file")
+    
+    logger.info(f"app.py: Loading OpenAI API key ending with: ...{api_key[-4:]}")
+    config['openai_api_key'] = api_key
     
     return config
 

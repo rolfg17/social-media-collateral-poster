@@ -5,8 +5,21 @@ import openai
 import httpx
 import tempfile
 import logging
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+
+def get_env_api_key():
+    """Get the API key directly from .env to validate against"""
+    # Clear any existing OpenAI environment variables
+    if 'OPENAI_API_KEY' in os.environ:
+        del os.environ['OPENAI_API_KEY']
+    if 'OPENAI_KEY' in os.environ:
+        del os.environ['OPENAI_KEY']
+        
+    # Load fresh from .env
+    load_dotenv()
+    return os.getenv('OPENAI_API_KEY')
 
 def extract_prompt_and_content(content):
     """
@@ -41,6 +54,14 @@ def extract_prompt_and_content(content):
 
 def generate_chatgpt_response(content, prompt, api_key):
     """Generate collaterals using ChatGPT"""
+    # Validate that the provided key matches the one in .env
+    env_key = get_env_api_key()
+    if not env_key:
+        raise ValueError("OPENAI_API_KEY not found in .env file")
+    if api_key != env_key:
+        raise ValueError("Provided API key does not match the key in .env file")
+        
+    logger.info(f"collateral_generator.py: Using OpenAI API key ending with: ...{api_key[-4:]}")
     client = openai.OpenAI(
         api_key=api_key,
         http_client=httpx.Client()
