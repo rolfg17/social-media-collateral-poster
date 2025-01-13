@@ -71,7 +71,6 @@ def create_text_image(text, width=700, height=700, font_size=40, config=None):
         total_lines = 0
         
         for paragraph in paragraphs:
-            logger.info(f" Has number prefix: {bool(re.match(r'^\d+[\.\)\s]', paragraph))}")
             
             # Try with different textwrap options
             normal_wrap = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars)
