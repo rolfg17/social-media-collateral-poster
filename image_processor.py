@@ -58,17 +58,14 @@ def load_font(font_path: str, font_size: int) -> ImageFont.FreeTypeFont:
 def get_emoji_image(emoji_char: str, size: int) -> Optional[Image.Image]:
     """Convert emoji character to PIL Image with support for compound emojis."""
     try:
-        # Handle compound emojis (e.g., family emojis, flag emojis)
-        if len(emoji_char) > 1 and not emoji.is_emoji(emoji_char[0]):
-            # If it's not a single emoji or the first character isn't an emoji,
-            # this might be text that was incorrectly identified
-            return None
-
-        img = Image.new('RGBA', (size, size), (255, 255, 255, 0))
+        # Create a slightly larger image with less padding
+        padding = size // 8  # Reduced padding
+        img = Image.new('RGBA', (size + padding * 2, size + padding * 2), (255, 255, 255, 0))
         draw = ImageDraw.Draw(img)
         
         try:
-            emoji_font = ImageFont.truetype(EMOJI_FONT_PATH, size)
+            # Use slightly larger font size to fill more space
+            emoji_font = ImageFont.truetype(EMOJI_FONT_PATH, int(size * 1.0))
         except OSError as e:
             logger.error(f"Failed to load emoji font {EMOJI_FONT_PATH}: {e}")
             return None
@@ -78,10 +75,11 @@ def get_emoji_image(emoji_char: str, size: int) -> Optional[Image.Image]:
         char_width = bbox[2] - bbox[0]
         char_height = bbox[3] - bbox[1]
         
-        # Center the emoji in the image
-        x = (size - char_width) // 2
-        y = (size - char_height) // 2
-
+        # Center the emoji in the padded image
+        x = (size + padding * 2 - char_width) // 2
+        y = (size + padding * 2 - char_height) // 2 - (bbox[1] // 2)  # Adjust vertical centering
+        
+        # Draw the emoji with embedded color
         try:
             # Try with embedded color first (works with Apple Color Emoji)
             draw.text((x, y), emoji_char, font=emoji_font, embedded_color=True)
@@ -89,12 +87,29 @@ def get_emoji_image(emoji_char: str, size: int) -> Optional[Image.Image]:
             # Fallback to regular rendering if embedded_color is not supported
             draw.text((x, y), emoji_char, font=emoji_font)
 
-        # Check if the image is empty (all transparent)
-        if not any(img.convert('RGBA').getdata()):
+        # Crop the image to remove padding if it's empty
+        bbox = img.getbbox()
+        if bbox:
+            img = img.crop(bbox)
+            # Resize to desired size while maintaining aspect ratio
+            img.thumbnail((size, size), Image.Resampling.LANCZOS)
+            # Create new image with exact size and paste thumbnail centered
+            final_img = Image.new('RGBA', (size, size), (255, 255, 255, 0))
+            
+            # Scale the emoji to fill more of the space while maintaining aspect ratio
+            scale_factor = min(size / img.width, size / img.height) * 0.95  # 95% of max size
+            new_width = int(img.width * scale_factor)
+            new_height = int(img.height * scale_factor)
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            
+            # Center the scaled emoji
+            paste_x = (size - new_width) // 2
+            paste_y = (size - new_height) // 2
+            final_img.paste(img, (paste_x, paste_y))
+            return final_img
+        else:
             logger.warning(f"Failed to render emoji (empty image): {emoji_char}")
             return None
-
-        return img
 
     except Exception as e:
         logger.warning(f"Failed to render emoji: {emoji_char}, error: {e}")
