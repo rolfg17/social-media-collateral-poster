@@ -4,7 +4,7 @@ import emoji
 import logging
 from pathlib import Path
 import streamlit as st
-from typing import Tuple, List, Optional, Dict
+from typing import Tuple, List, Optional, Dict, Any
 
 
 # Constants
@@ -23,30 +23,39 @@ FONT_PATH = "/System/Library/Fonts/Helvetica.ttc"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def validate_config(config: Optional[Dict[str, str]]) -> bool:
-    """Validate configuration dictionary.
-    
-    Returns False if config is invalid, True otherwise.
-    Logs specific validation errors.
-    """
-    if not config:
-        return True
-        
-    required_keys = ['background_image_path']
-    for key in required_keys:
-        if key in config and not isinstance(config[key], str):
-            logger.error(f"Config error: {key} must be a string")
-            return False
-    return True
+# Constants for font configuration
+FONT_CONFIG = {
+    'DEFAULT_TEXT_COLOR': 'black',
+    'LINE_SPACING_FACTOR': 1.3,
+    'EMOJI_WIDTH_FACTOR': 1.2,
+    'MIN_FONT_SIZE': 24,
+    'HEADER_FONT_SCALE': 0.6,
+    'MIN_HEADER_FONT_SIZE': 16,
+    'FALLBACK_SYSTEM_FONT': "/System/Library/Fonts/Helvetica.ttc",
+    'FONT_PATH': "/System/Library/Fonts/Helvetica.ttc",
+    'EMOJI_FONT_PATH': "/System/Library/Fonts/Apple Color Emoji.ttc"
+}
+
+# Common text drawing utilities
+def get_font_metrics(draw: ImageDraw.Draw, text: str, font: ImageFont.FreeTypeFont) -> Tuple[int, int]:
+    """Get width and height of text with given font."""
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+def draw_centered_text(draw: ImageDraw.Draw, text: str, x: int, y: int, font: ImageFont.FreeTypeFont, 
+                      width: int, color: str = FONT_CONFIG['DEFAULT_TEXT_COLOR']) -> None:
+    """Draw text centered horizontally at given y position."""
+    text_width, _ = get_font_metrics(draw, text, font)
+    x = (width - text_width) // 2
+    draw.text((x, y), text, font=font, fill=color)
 
 def load_font(font_path: str, size: int) -> ImageFont.FreeTypeFont:
     """Load a font with error handling."""
     try:
-        size = max(MIN_FONT_SIZE, int(size))  
+        size = max(FONT_CONFIG['MIN_FONT_SIZE'], int(size))  # Ensure size is at least MIN_FONT_SIZE
         return ImageFont.truetype(font_path, size)
     except Exception as e:
         logger.error(f"Error loading font {font_path} with size {size}: {e}")
-        # Return a default font as fallback
         try:
             return ImageFont.load_default()
         except Exception as fallback_e:
@@ -55,9 +64,9 @@ def load_font(font_path: str, size: int) -> ImageFont.FreeTypeFont:
 
 def load_emoji_font(size: int) -> Optional[ImageFont.FreeTypeFont]:
     """Load emoji font with multiple fallback attempts."""
-    size = max(MIN_FONT_SIZE, int(size))
+    size = max(FONT_CONFIG['MIN_FONT_SIZE'], int(size))
     emoji_fonts = [
-        EMOJI_FONT_PATH,
+        FONT_CONFIG['EMOJI_FONT_PATH'],
         "/System/Library/Fonts/AppleColorEmoji.ttf",  # Try alternate path
         "/System/Library/Fonts/Apple Color Emoji.ttf"  # Another common path
     ]
@@ -78,6 +87,22 @@ def load_emoji_font(size: int) -> Optional[ImageFont.FreeTypeFont]:
     logger.warning(f"Failed to load any emoji font, falling back to regular font")
     return None
 
+def validate_config(config: Optional[Dict[str, str]]) -> bool:
+    """Validate configuration dictionary.
+    
+    Returns False if config is invalid, True otherwise.
+    Logs specific validation errors.
+    """
+    if not config:
+        return True
+        
+    required_keys = ['background_image_path']
+    for key in required_keys:
+        if key in config and not isinstance(config[key], str):
+            logger.error(f"Config error: {key} must be a string")
+            return False
+    return True
+
 def process_text_line(text: str, font_size: int, max_width: int, text_color: str, background_color: Optional[str] = None) -> Image.Image:
     """Process a line of text, handling both regular text and emojis."""
     # Create initial image with generous height
@@ -87,7 +112,7 @@ def process_text_line(text: str, font_size: int, max_width: int, text_color: str
     
     # Load fonts
     try:
-        font_size = max(MIN_FONT_SIZE, int(font_size))
+        font_size = max(FONT_CONFIG['MIN_FONT_SIZE'], int(font_size))
         regular_font = load_font(st.session_state.body_font_path, font_size)
         emoji_font = load_emoji_font(font_size)
         logger.info(f"Process text line - loaded body font: {st.session_state.body_font_path}")
@@ -206,10 +231,15 @@ def calculate_text_height(text: str, font_size: int, width: int, draw: ImageDraw
 def load_background_image(config: Dict[str, str], width: int, height: int) -> Image.Image:
     """Load and resize background image from config, or create blank image."""
     if config and 'background_image_path' in config:
-        bg_path = Path(__file__).parent / config['background_image_path']
+        # Try both relative to project root and absolute path
+        project_root = Path(__file__).parent
+        bg_path = project_root / config['background_image_path']
+        
+        logger.info(f"Attempting to load background image from: {bg_path}")
         if bg_path.exists():
             try:
                 bg_img = Image.open(bg_path)
+                logger.info(f"Successfully loaded background image: {bg_path}")
                 # Resize to maintain aspect ratio and cover the required dimensions
                 bg_ratio = bg_img.width / bg_img.height
                 target_ratio = width / height
@@ -228,6 +258,38 @@ def load_background_image(config: Dict[str, str], width: int, height: int) -> Im
                 return bg_img.convert('RGB')
             except Exception as e:
                 logger.error(f"Error loading background image: {e}")
+                logger.error(f"Attempted path: {bg_path}")
+        else:
+            logger.error(f"Background image not found at path: {bg_path}")
+            # Try relative to config file location
+            config_path = project_root / 'config.json'
+            if config_path.exists():
+                config_dir = config_path.parent
+                relative_path = config_dir / config['background_image_path']
+                try:
+                    if relative_path.exists():
+                        bg_img = Image.open(relative_path)
+                        logger.info(f"Successfully loaded background image from config relative path: {relative_path}")
+                        bg_ratio = bg_img.width / bg_img.height
+                        target_ratio = width / height
+                        
+                        if bg_ratio > target_ratio:
+                            new_width = int(height * bg_ratio)
+                            bg_img = bg_img.resize((new_width, height))
+                            left = (new_width - width) // 2
+                            bg_img = bg_img.crop((left, 0, left + width, height))
+                        else:
+                            new_height = int(width / bg_ratio)
+                            bg_img = bg_img.resize((width, new_height))
+                            top = (new_height - height) // 2
+                            bg_img = bg_img.crop((0, top, width, top + height))
+                        
+                        return bg_img.convert('RGB')
+                except Exception as e:
+                    logger.error(f"Error loading background image from config relative path: {e}")
+                    logger.error(f"Attempted path: {relative_path}")
+    else:
+        logger.warning("No background_image_path in config, using default background")
     
     return Image.new('RGB', (width, height), DEFAULT_BACKGROUND_COLOR)
 
@@ -240,8 +302,7 @@ def draw_text_line(img: Image.Image, draw: ImageDraw.Draw, line: str, x: int, y:
     
     # Load fonts - ensure font size is valid
     try:
-        font_size = max(MIN_FONT_SIZE, int(font_size))
-        # Load fonts only once for the line - use session state body font
+        font_size = max(FONT_CONFIG['MIN_FONT_SIZE'], int(font_size))
         regular_font = load_font(st.session_state.body_font_path, font_size)
         emoji_font = load_emoji_font(font_size)
         
@@ -312,7 +373,7 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
     margin = height * 0.05
     
     # Load header/footer font once for consistent sizing
-    header_font_size = max(int(font_size * HEADER_FONT_SCALE), MIN_HEADER_FONT_SIZE)
+    header_font_size = max(int(font_size * FONT_CONFIG['HEADER_FONT_SCALE']), FONT_CONFIG['MIN_HEADER_FONT_SIZE'])
     header_font = load_font(st.session_state.header_font_path, header_font_size)
     logger.info(f" Header/Footer font loaded with size {header_font_size}")
     
@@ -323,7 +384,7 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
         header_width = draw.textlength(header, font=header_font)
         header_x = (width - header_width) // 2
         header_y = margin
-        draw.text((header_x, header_y), header, font=header_font, fill='#444444')
+        draw_centered_text(draw, header, header_x, header_y, header_font, width)
         start_y = header_y + header_height + margin
     else:
         start_y = margin * 2
@@ -336,7 +397,7 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
         footer_x = (width - footer_width) // 2
         footer_y = height - margin - footer_height
         end_y = footer_y - margin
-        draw.text((footer_x, footer_y), footer, font=header_font, fill='#444444')
+        draw_centered_text(draw, footer, footer_x, footer_y, header_font, width)
     else:
         end_y = height - (margin * 2)
 
@@ -346,7 +407,7 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
         text_height, body_font = calculate_text_height(text, font_size, width, draw)
         available_height = end_y - start_y
         
-        while text_height > available_height and font_size > MIN_FONT_SIZE:
+        while text_height > available_height and font_size > FONT_CONFIG['MIN_FONT_SIZE']:
             font_size -= 2
             text_height, body_font = calculate_text_height(text, font_size, width, draw)
         
@@ -379,7 +440,7 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
             processed_paragraphs.pop()
         
         # Calculate line spacing
-        line_spacing = font_size * LINE_SPACING_FACTOR
+        line_spacing = font_size * FONT_CONFIG['LINE_SPACING_FACTOR']
         
         # Calculate total height of text block
         text_block_height = len(processed_paragraphs) * line_spacing
@@ -394,9 +455,61 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
                 continue
             
             logger.info(f" Drawing text line: '{line[:15]}{'...' if len(line) > 15 else ''}'")
-            draw_text_line(img, draw, line, 0, y, font_size, DEFAULT_TEXT_COLOR)
+            draw_text_line(img, draw, line, 0, y, font_size, FONT_CONFIG['DEFAULT_TEXT_COLOR'])
             y += line_spacing
     else:
         logger.info("No main text to process")
     
     return img
+
+class ImageProcessor:
+    """Main class for handling image processing operations."""
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self._validate_config()
+        self.header_font = None
+        self.body_font = None
+    
+    def _validate_config(self) -> bool:
+        """Internal config validation."""
+        return validate_config(self.config)
+    
+    def load_fonts(self, header_path: str, body_path: str, header_size: int, body_size: int) -> None:
+        """Load header and body fonts with specified paths and sizes."""
+        try:
+            self.header_font = load_font(header_path, header_size)
+            self.body_font = load_font(body_path, body_size)
+            logger.info(f"Loaded fonts - header: {header_path}, body: {body_path}")
+        except Exception as e:
+            logger.error(f"Failed to load fonts: {e}")
+            raise
+    
+    def create_text_image(self, text: str, config: Optional[Dict[str, Any]] = None, **kwargs) -> Image.Image:
+        """Create text image with loaded fonts and optional configuration override."""
+        if not (self.header_font and self.body_font):
+            raise ValueError("Fonts must be loaded before creating images")
+            
+        # Use instance config if no override provided
+        image_config = config if config is not None else self.config
+        
+        # Extract dimensions and font size from config
+        width = image_config.get('width', 700)  # Default width
+        height = image_config.get('height', 700)  # Default height
+        font_size = image_config.get('font_size', 40)  # Default font size
+        
+        return create_text_image(
+            text=text,
+            width=width,
+            height=height,
+            font_size=font_size,
+            config=image_config
+        )
+
+# Public API
+__all__ = [
+    'create_text_image',  # Main image creation function
+    'load_font',          # Font loading utility
+    'validate_config',    # Configuration validation
+    'FONT_CONFIG'         # Font configuration constants
+]
