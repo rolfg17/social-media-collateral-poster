@@ -56,28 +56,48 @@ def load_font(font_path: str, font_size: int) -> ImageFont.FreeTypeFont:
             return ImageFont.load_default()
 
 def get_emoji_image(emoji_char: str, size: int) -> Optional[Image.Image]:
-    """Convert emoji character to PIL Image."""
-    # Use emojirender to get colored emoji (if available on the system)
+    """Convert emoji character to PIL Image with support for compound emojis."""
     try:
+        # Handle compound emojis (e.g., family emojis, flag emojis)
+        if len(emoji_char) > 1 and not emoji.is_emoji(emoji_char[0]):
+            # If it's not a single emoji or the first character isn't an emoji,
+            # this might be text that was incorrectly identified
+            return None
+
         img = Image.new('RGBA', (size, size), (255, 255, 255, 0))
         draw = ImageDraw.Draw(img)
-        font = ImageFont.truetype(EMOJI_FONT_PATH, size)
-
-        # Adjusted bounding box for better alignment
-        bbox = draw.textbbox((0, 0), emoji_char, font=font)
-        x = (size - (bbox[2] - bbox[0])) // 2
-        y = (size - (bbox[3] - bbox[1])) // 2
-
-        # Fallback for Apple Emoji Font: disable embedded_color if unsupported
+        
         try:
-            draw.text((x, y), emoji_char, font=font, embedded_color=True)
+            emoji_font = ImageFont.truetype(EMOJI_FONT_PATH, size)
+        except OSError as e:
+            logger.error(f"Failed to load emoji font {EMOJI_FONT_PATH}: {e}")
+            return None
+
+        # Calculate the bounding box for the entire emoji sequence
+        bbox = draw.textbbox((0, 0), emoji_char, font=emoji_font)
+        char_width = bbox[2] - bbox[0]
+        char_height = bbox[3] - bbox[1]
+        
+        # Center the emoji in the image
+        x = (size - char_width) // 2
+        y = (size - char_height) // 2
+
+        try:
+            # Try with embedded color first (works with Apple Color Emoji)
+            draw.text((x, y), emoji_char, font=emoji_font, embedded_color=True)
         except TypeError:
-            draw.text((x, y), emoji_char, font=font)
+            # Fallback to regular rendering if embedded_color is not supported
+            draw.text((x, y), emoji_char, font=emoji_font)
+
+        # Check if the image is empty (all transparent)
+        if not any(img.convert('RGBA').getdata()):
+            logger.warning(f"Failed to render emoji (empty image): {emoji_char}")
+            return None
 
         return img
 
     except Exception as e:
-        logger.warning(f"Failed to render emoji as text: {e}")
+        logger.warning(f"Failed to render emoji: {emoji_char}, error: {e}")
         return None
 
 
@@ -92,15 +112,27 @@ def process_text_line(line: str, font_size: int) -> List[Tuple[str, str]]:
     current_line = []
     current_word = ""
     
-    for char in line:
-        if emoji.is_emoji(char):
-            if current_word:
-                current_line.append(("text", current_word))
-                current_word = ""
-            current_line.append(("emoji", char))
-        else:
-            current_word += char
+    # Process the line character by character
+    i = 0
+    while i < len(line):
+        # Check for compound emojis first
+        found_emoji = False
+        for j in range(min(8, len(line) - i), 0, -1):  # Check up to 8 characters
+            possible_emoji = line[i:i+j]
+            if emoji.is_emoji(possible_emoji):
+                if current_word:
+                    current_line.append(("text", current_word))
+                    current_word = ""
+                current_line.append(("emoji", possible_emoji))
+                i += j
+                found_emoji = True
+                break
+        
+        if not found_emoji:
+            current_word += line[i]
+            i += 1
     
+    # Add any remaining text
     if current_word:
         current_line.append(("text", current_word))
     
