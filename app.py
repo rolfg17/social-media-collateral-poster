@@ -39,8 +39,8 @@ class CollateralApp:
         self.image_processor.load_fonts(
             header_path=st.session_state.header_font_path,
             body_path=st.session_state.body_font_path,
-            header_size=40,  # Default sizes
-            body_size=40
+            header_font_size=40,  # Default sizes
+            body_font_size=40
         )
     
     def show_import_results(self):
@@ -228,8 +228,8 @@ def main():
         app.image_processor.load_fonts(
             header_path=st.session_state.header_font_path,
             body_path=st.session_state.body_font_path,
-            header_size=40,  # Default sizes
-            body_size=40
+            header_font_size=40,  # Default sizes
+            body_font_size=40
         )
     
     # Create a copy of config to avoid modifying the original

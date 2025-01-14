@@ -1,7 +1,8 @@
+"""Text processing utilities for Social Media Collateral Poster."""
+
 import re
-import emoji
 import logging
-from typing import Tuple, List, Dict
+from typing import Tuple, List, Dict, Any
 from exceptions import TextError
 
 logger = logging.getLogger(__name__)
@@ -127,37 +128,64 @@ def clean_text_for_image(text: str) -> str:
     except Exception as e:
         raise TextError("Failed to clean text for image", str(e))
 
-def parse_markdown_content(content, config=None):
-    """Parse sections from markdown content string"""
+def parse_markdown_content(content: str, config: Dict[str, Any] = None) -> Dict[str, str]:
+    """
+    Parse sections from markdown content string.
+
+    This function takes a markdown content string and returns a dictionary
+    of sections, where each section is a header followed by its content.
+
+    Args:
+        content: The markdown content string
+        config: A dictionary of configuration options
+
+    Returns:
+        A dictionary of sections
+    """
     sections = {}
     current_section = None
     current_content = []
     in_collaterals = False
     header_counts = {}
-    
+
+    # Define the header that marks the start of the Collaterals section
     collaterals_header = config.get('collaterals_header', '# Collaterals') if config else '# Collaterals'
 
+    # Split the content into lines
     lines = content.split('\n')
+
+    # Iterate over the lines
     for line in lines:
         if line.strip() == collaterals_header:
+            # We've reached the Collaterals section
             in_collaterals = True
             continue
         elif line.startswith("# ") and in_collaterals:
+            # We've reached the end of the Collaterals section
             break
         elif in_collaterals:
             if line.startswith("## "):
+                # We've reached a new section
                 if current_section:
+                    # Add the current section to the dictionary
                     sections[current_section] = '\n'.join(current_content).strip()
+                # Get the base section name without number
                 base_section = line.lstrip("#").strip()
                 if base_section in header_counts:
+                    # Increment the count for this section
                     header_counts[base_section] += 1
                 else:
+                    # Initialize the count for this section
                     header_counts[base_section] = 1
+                # Create the full section name with number
                 current_section = f"{base_section} ({header_counts[base_section]})"
+                # Reset the content for this section
                 current_content = []
             elif current_section is not None and not line.startswith("#"):
+                # Add the line to the current section's content
                 current_content.append(line)
 
+    # Add the last section to the dictionary
     if current_section and in_collaterals:
         sections[current_section] = '\n'.join(current_content).strip()
 
