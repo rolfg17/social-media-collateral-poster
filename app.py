@@ -418,7 +418,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
     
-    logger.info("Starting application...")
+    logger.info("\n\n Starting application...")
     logger.info(f"Command line arguments: {sys.argv}")
     
     parser = argparse.ArgumentParser(description='Social Media Collateral Generator')

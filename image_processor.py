@@ -22,6 +22,7 @@ HEADER_FONT_SCALE = 0.6
 MIN_HEADER_FONT_SIZE = 16
 FALLBACK_SYSTEM_FONT = "/System/Library/Fonts/Helvetica.ttc"
 EMOJI_FONT_PATH = "/System/Library/Fonts/Apple Color Emoji.ttc"
+FONT_PATH = "/System/Library/Fonts/Helvetica.ttc"
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -43,145 +44,167 @@ def validate_config(config: Optional[Dict[str, str]]) -> bool:
             return False
     return True
 
-def load_font(font_path: str, font_size: int) -> ImageFont.FreeTypeFont:
-    """Load a font with fallback options."""
+def load_font(font_path: str, size: int) -> ImageFont.FreeTypeFont:
+    """Load a font with error handling."""
     try:
-        return ImageFont.truetype(font_path, font_size)
-    except OSError as e:
-        logger.warning(f"Failed to load font {font_path}: {e}")
-        try:
-            return ImageFont.truetype(FALLBACK_SYSTEM_FONT, font_size)
-        except OSError as e:
-            logger.error(f"Failed to load fallback font: {e}")
-            return ImageFont.load_default()
-
-def get_emoji_image(emoji_char: str, size: int) -> Optional[Image.Image]:
-    """Convert emoji character to PIL Image with support for compound emojis."""
-    try:
-        # Create a slightly larger image with less padding
-        padding = size // 8  # Reduced padding
-        img = Image.new('RGBA', (size + padding * 2, size + padding * 2), (255, 255, 255, 0))
-        draw = ImageDraw.Draw(img)
-        
-        try:
-            # Use slightly larger font size to fill more space
-            emoji_font = ImageFont.truetype(EMOJI_FONT_PATH, int(size * 1.0))
-        except OSError as e:
-            logger.error(f"Failed to load emoji font {EMOJI_FONT_PATH}: {e}")
-            return None
-
-        # Calculate the bounding box for the entire emoji sequence
-        bbox = draw.textbbox((0, 0), emoji_char, font=emoji_font)
-        char_width = bbox[2] - bbox[0]
-        char_height = bbox[3] - bbox[1]
-        
-        # Center the emoji in the padded image
-        x = (size + padding * 2 - char_width) // 2
-        y = (size + padding * 2 - char_height) // 2 - (bbox[1] // 2)  # Adjust vertical centering
-        
-        # Draw the emoji with embedded color
-        try:
-            # Try with embedded color first (works with Apple Color Emoji)
-            draw.text((x, y), emoji_char, font=emoji_font, embedded_color=True)
-        except TypeError:
-            # Fallback to regular rendering if embedded_color is not supported
-            draw.text((x, y), emoji_char, font=emoji_font)
-
-        # Crop the image to remove padding if it's empty
-        bbox = img.getbbox()
-        if bbox:
-            img = img.crop(bbox)
-            # Resize to desired size while maintaining aspect ratio
-            img.thumbnail((size, size), Image.Resampling.LANCZOS)
-            # Create new image with exact size and paste thumbnail centered
-            final_img = Image.new('RGBA', (size, size), (255, 255, 255, 0))
-            
-            # Scale the emoji to fill more of the space while maintaining aspect ratio
-            scale_factor = min(size / img.width, size / img.height) * 0.95  # 95% of max size
-            new_width = int(img.width * scale_factor)
-            new_height = int(img.height * scale_factor)
-            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            
-            # Center the scaled emoji
-            paste_x = (size - new_width) // 2
-            paste_y = (size - new_height) // 2
-            final_img.paste(img, (paste_x, paste_y))
-            return final_img
-        else:
-            logger.warning(f"Failed to render emoji (empty image): {emoji_char}")
-            return None
-
+        size = max(MIN_FONT_SIZE, int(size))  
+        return ImageFont.truetype(font_path, size)
     except Exception as e:
-        logger.warning(f"Failed to render emoji: {emoji_char}, error: {e}")
-        return None
+        logger.error(f"Error loading font {font_path} with size {size}: {e}")
+        # Return a default font as fallback
+        try:
+            return ImageFont.load_default()
+        except Exception as fallback_e:
+            logger.error(f"Failed to load default font: {fallback_e}")
+            raise
 
+def load_emoji_font(size: int) -> Optional[ImageFont.FreeTypeFont]:
+    """Load emoji font with multiple fallback attempts."""
+    size = max(MIN_FONT_SIZE, int(size))
+    emoji_fonts = [
+        EMOJI_FONT_PATH,
+        "/System/Library/Fonts/AppleColorEmoji.ttf",  # Try alternate path
+        "/System/Library/Fonts/Apple Color Emoji.ttf"  # Another common path
+    ]
+    
+    # Try different sizes from largest to smallest
+    sizes_to_try = [size, int(size * 0.9), int(size * 0.8), int(size * 0.7)]
+    
+    for font_path in emoji_fonts:
+        for try_size in sizes_to_try:
+            try:
+                font = ImageFont.truetype(font_path, try_size)
+                logger.info(f"Successfully loaded emoji font {font_path} at size {try_size}")
+                return font
+            except Exception as e:
+                logger.debug(f"Failed to load emoji font {font_path} at size {try_size}: {e}")
+                continue
+    
+    logger.warning(f"Failed to load any emoji font, falling back to regular font")
+    return None
+
+def process_text_line(text: str, font_size: int, max_width: int, text_color: str, background_color: Optional[str] = None) -> Image.Image:
+    """Process a line of text, handling both regular text and emojis."""
+    # Create initial image with generous height
+    height = int(font_size * 1.5)  # Give enough vertical space
+    img = Image.new('RGBA', (max_width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    
+    # Load fonts
+    try:
+        font_size = max(MIN_FONT_SIZE, int(font_size))
+        regular_font = load_font(st.session_state.body_font_path, font_size)
+        emoji_font = load_emoji_font(font_size)
+        logger.info(f"Process text line - loaded body font: {st.session_state.body_font_path}")
+    except OSError as e:
+        logger.error(f"Failed to load fonts: {e}")
+        return img
+
+    x = 0  # Current x position
+    y = 0  # Current y position
+    line_height = 0  # Track maximum height of the line
+
+    # Process each character
+    i = 0
+    while i < len(text):
+        char = text[i]
+        
+        # Check for compound emojis (like flags or skin tone modifiers)
+        next_char = text[i + 1] if i + 1 < len(text) else None
+        compound_emoji = None
+        if next_char and emoji.is_emoji(char + next_char):
+            compound_emoji = char + next_char
+        
+        # Determine if current character(s) is emoji
+        current_text = compound_emoji if compound_emoji else char
+        is_emoji = emoji.is_emoji(current_text)
+        
+        # Choose appropriate font
+        current_font = emoji_font if is_emoji and emoji_font else regular_font
+        
+        # Get text size
+        try:
+            bbox = draw.textbbox((x, y), current_text, font=current_font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+        except Exception as e:
+            logger.warning(f"Failed to get text size for '{current_text}': {e}")
+            text_width = font_size
+            text_height = font_size
+
+        # Update line height if this character is taller
+        line_height = max(line_height, text_height)
+        
+        # Draw the character
+        try:
+            if is_emoji and emoji_font:
+                try:
+                    draw.text((x, y), current_text, font=current_font, embedded_color=True)
+                except TypeError:
+                    draw.text((x, y), current_text, font=current_font, fill=text_color)
+            else:
+                draw.text((x, y), current_text, font=current_font, fill=text_color)
+        except Exception as e:
+            logger.warning(f"Failed to draw text '{current_text}': {e}")
+
+        # Move cursor
+        x += text_width
+        
+        # Skip extra character if we processed a compound emoji
+        if compound_emoji:
+            i += 2
+        else:
+            i += 1
+
+    # Crop to actual content
+    bbox = img.getbbox()
+    if bbox:
+        img = img.crop(bbox)
+    
+    # Create final image with proper dimensions and background
+    final_height = max(line_height, img.height)
+    final_img = Image.new('RGBA', (max_width, final_height), 
+                         background_color if background_color else (0, 0, 0, 0))
+    
+    # Center vertically
+    paste_y = (final_height - img.height) // 2
+    final_img.paste(img, (0, paste_y), img)
+    
+    return final_img
 
 def wrap_paragraph(paragraph: str, max_chars: int) -> List[str]:
     """Wrap a paragraph of text to fit within max_chars per line."""
-    normal_wrap = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars)
+    # Remove any existing newlines and wrap the text
     no_indent = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars, initial_indent='', subsequent_indent='')
     return no_indent.split('\n')
-
-def process_text_line(line: str, font_size: int) -> List[Tuple[str, str]]:
-    """Process a line of text, separating emojis from regular text."""
-    current_line = []
-    current_word = ""
-    
-    # Process the line character by character
-    i = 0
-    while i < len(line):
-        # Check for compound emojis first
-        found_emoji = False
-        for j in range(min(8, len(line) - i), 0, -1):  # Check up to 8 characters
-            possible_emoji = line[i:i+j]
-            if emoji.is_emoji(possible_emoji):
-                if current_word:
-                    current_line.append(("text", current_word))
-                    current_word = ""
-                current_line.append(("emoji", possible_emoji))
-                i += j
-                found_emoji = True
-                break
-        
-        if not found_emoji:
-            current_word += line[i]
-            i += 1
-    
-    # Add any remaining text
-    if current_word:
-        current_line.append(("text", current_word))
-    
-    return current_line
 
 def calculate_text_height(text: str, font_size: int, width: int, draw: ImageDraw.Draw) -> Tuple[float, ImageFont.FreeTypeFont]:
     """Calculate the height of text given the font size and width."""
     font = load_font(st.session_state.body_font_path, font_size)
-            
-    # Calculate average character width using a more representative sample
-    sample_text = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,!?"
-    total_width = draw.textlength(sample_text, font=font)
-    avg_char_width = total_width / len(sample_text)
-    max_chars = int((width * 0.85) / avg_char_width)
     
-    logger.info(f" Max chars per line: {max_chars}")
-    
+    # Split into paragraphs
     paragraphs = text.split('\n\n')
-    total_lines = 0
+    
+    # Calculate total height
+    total_height = 0
+    line_height = font_size * 1.5
     
     for paragraph in paragraphs:
+        if not paragraph.strip():
+            total_height += line_height
+            continue
+            
+        # Get average character width
+        avg_char_width = sum(draw.textlength(char, font=font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
+        max_chars = int((width * 0.9) / avg_char_width)
         
-        # Try with different textwrap options
-        normal_wrap = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars)
-        no_indent = textwrap.fill(paragraph.replace('\n', ' '), width=max_chars, initial_indent='', subsequent_indent='')
+        # Wrap text and count lines
+        wrapped_lines = wrap_paragraph(paragraph, max_chars)
+        total_height += len(wrapped_lines) * line_height
         
-        wrapped_text = no_indent  # Use no_indent version for now
-        total_lines += len(wrapped_text.split('\n'))
+        # Add space between paragraphs
         if len(paragraphs) > 1:
-            total_lines += 1
-        
-    # Calculate total height needed
-    line_height = font.size * LINE_SPACING_FACTOR  # Add 50% line spacing
-    total_height = total_lines * line_height
+            total_height += line_height
     
     return total_height, font
 
@@ -213,44 +236,93 @@ def load_background_image(config: Dict[str, str], width: int, height: int) -> Im
     
     return Image.new('RGB', (width, height), DEFAULT_BACKGROUND_COLOR)
 
-def draw_text_line(img: Image.Image, draw: ImageDraw.Draw, line: List[Tuple[str, str]], x: int, y: int, body_font: ImageFont.FreeTypeFont, font_size: int) -> int:
+def draw_text_line(img: Image.Image, draw: ImageDraw.Draw, line: str, x: int, y: float, font_size: int, text_color: str) -> int:
     """Draw a line of text with mixed emoji and regular text."""
-    current_x = x
-    for word_type, word in line:
-        if word_type == "text":
-            draw.text((current_x, y), word + " ", fill=DEFAULT_TEXT_COLOR, font=body_font)
-            current_x += draw.textlength(word + " ", font=body_font)
-        else:  # emoji
-            emoji_img = get_emoji_image(word, font_size)
-            if emoji_img:
-                # Paste emoji with transparency
-                img.paste(emoji_img, (int(current_x), int(y)), emoji_img)
-            current_x += font_size * EMOJI_WIDTH_FACTOR
-    return current_x - x  # Return total width of line
+    # First calculate total width to center the line
+    total_width = 0
+    chars_to_render = []
+    i = 0
+    
+    # Load fonts - ensure font size is valid
+    try:
+        font_size = max(MIN_FONT_SIZE, int(font_size))
+        # Load fonts only once for the line - use session state body font
+        regular_font = load_font(st.session_state.body_font_path, font_size)
+        emoji_font = load_emoji_font(font_size)
+        
+        logger.info(f"Loaded fonts for line - body font: {st.session_state.body_font_path}, size: {font_size}")
+    except OSError as e:
+        logger.error(f"Failed to load fonts: {e}")
+        return 0
+
+    # First pass: calculate widths and prepare characters
+    while i < len(line):
+        char = line[i]
+        next_char = line[i + 1] if i + 1 < len(line) else None
+        compound_emoji = None
+        
+        if next_char and emoji.is_emoji(char + next_char):
+            compound_emoji = char + next_char
+            current_text = compound_emoji
+            advance = 2
+        else:
+            current_text = char
+            advance = 1
+            
+        is_emoji = emoji.is_emoji(current_text)
+        current_font = emoji_font if is_emoji and emoji_font else regular_font
+        
+        try:
+            bbox = draw.textbbox((0, 0), current_text, font=current_font)
+            text_width = bbox[2] - bbox[0]
+        except Exception as e:
+            logger.warning(f"Failed to get text size for '{current_text}': {e}")
+            text_width = font_size
+            
+        chars_to_render.append((current_text, text_width, is_emoji, current_font))
+        total_width += text_width
+        i += advance
+
+    # Calculate starting x position to center the line
+    start_x = (img.width - total_width) // 2
+    current_x = start_x
+
+    # Second pass: actually render the text
+    for text, width, is_emoji, font in chars_to_render:
+        try:
+            if is_emoji and emoji_font:
+                try:
+                    draw.text((int(current_x), int(y)), text, font=font, embedded_color=True)
+                except TypeError:
+                    draw.text((int(current_x), int(y)), text, font=font, fill=text_color)
+            else:
+                draw.text((int(current_x), int(y)), text, font=font, fill=text_color)
+        except Exception as e:
+            logger.error(f"Failed to draw text: {e}")
+        
+        current_x += width
+
+    return total_width
 
 def create_text_image(text: str, width: int = 700, height: int = 700, font_size: int = 40, config: Optional[Dict[str, str]] = None) -> Image.Image:
     """Create image with text and optional background."""
-    if not validate_config(config):
-        logger.warning("Invalid config provided, using defaults")
-        config = None
-    
-    # Create or load background image
+    # Load background image or create blank image
     img = load_background_image(config, width, height)
     draw = ImageDraw.Draw(img)
-
-    # Load fonts
-    header_font_size = max(int(font_size * HEADER_FONT_SCALE), MIN_HEADER_FONT_SIZE)
-    header_font = load_font(st.session_state.header_font_path, header_font_size)
-    body_font = load_font(st.session_state.body_font_path, font_size)
 
     # Get header and footer from config
     header = config.get('header', '') if config else ''
     footer = config.get('footer', '') if config else ''
-
-    # Calculate positions
+    
     margin = height * 0.05
     
+    # Load header/footer font once for consistent sizing
+    header_font_size = max(int(font_size * HEADER_FONT_SCALE), MIN_HEADER_FONT_SIZE)
+    header_font = load_font(st.session_state.header_font_path, header_font_size)
+    logger.info(f"Header/Footer font loaded with size {header_font_size}")
+    
     if header:
+        logger.info(f"Drawing header: '{header}'")
         header_bbox = draw.textbbox((0, 0), header, font=header_font)
         header_height = header_bbox[3] - header_bbox[1]
         header_width = draw.textlength(header, font=header_font)
@@ -260,9 +332,10 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
         start_y = header_y + header_height + margin
     else:
         start_y = margin * 2
-
+    
     if footer:
-        footer_bbox = draw.textbbox((0, 0), footer, font=header_font)
+        logger.info(f"Drawing footer: '{footer}'")
+        footer_bbox = draw.textbbox((0, 0), footer, font=header_font)  # Use same header_font
         footer_height = footer_bbox[3] - footer_bbox[1]
         footer_width = draw.textlength(footer, font=header_font)
         footer_x = (width - footer_width) // 2
@@ -272,64 +345,63 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
     else:
         end_y = height - (margin * 2)
 
-    # Calculate available height for main text
-    available_height = end_y - start_y
-
-    # Find the right font size
-    while font_size > MIN_FONT_SIZE:
-        text_height, font = calculate_text_height(text, font_size, width, draw)
-        if text_height <= available_height:
-            break
-        font_size -= 2
-    
-    # Calculate maximum characters per line
-    avg_char_width = sum(draw.textlength(char, font=body_font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
-    max_chars = int((width * 0.9) / avg_char_width)
-    
-    logger.info(f" ---- Text Wrapping")
-    logger.info(f" Width: {width}, Avg char width: {avg_char_width:.2f}")
-    logger.info(f" Max chars per line: {max_chars}")
-    
-    # Process the text paragraph by paragraph
-    paragraphs = text.split('\n\n')
-    processed_paragraphs = []
-    
-    for paragraph in paragraphs:
-        # For regular paragraphs, wrap text normally
-        wrapped_lines = wrap_paragraph(paragraph, max_chars)
-        for line in wrapped_lines:
-            processed_paragraphs.append(process_text_line(line, font_size))
+    # Only process main text if it exists
+    if text.strip():
+        logger.info(f"Processing main text (length: {len(text)})")
+        text_height, body_font = calculate_text_height(text, font_size, width, draw)
+        available_height = end_y - start_y
         
-        # Add an empty line between paragraphs
-        if len(paragraphs) > 1:
-            processed_paragraphs.append([])
-    
-    if processed_paragraphs and not processed_paragraphs[-1]:
-        processed_paragraphs.pop()
-    
-    # Calculate total height and starting y position for main text
-    line_spacing = font_size * LINE_SPACING_FACTOR
-    total_height = len(processed_paragraphs) * line_spacing
-    
-    # Center the text between header and footer
-    y = start_y + (available_height - total_height) / 2
-    
-    # Draw each line
-    for line in processed_paragraphs:
-        if not line:  # Empty line for paragraph separation
-            y += line_spacing
-            continue
+        while text_height > available_height and font_size > MIN_FONT_SIZE:
+            font_size -= 2
+            text_height, body_font = calculate_text_height(text, font_size, width, draw)
+        
+        # Calculate maximum characters per line
+        avg_char_width = sum(draw.textlength(char, font=body_font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
+        max_chars = int((width * 0.9) / avg_char_width)
+        
+        logger.info(f" ---- Text Wrapping")
+        logger.info(f" Font size: {font_size}")
+        logger.info(f" Max chars per line: {max_chars}")
+        
+        # Split text into paragraphs and wrap each one
+        paragraphs = text.split('\n\n')
+        processed_paragraphs = []
+        
+        for paragraph in paragraphs:
+            if not paragraph.strip():
+                processed_paragraphs.append("")
+                continue
+                
+            # For regular paragraphs, wrap text normally
+            wrapped_lines = wrap_paragraph(paragraph, max_chars)
+            processed_paragraphs.extend(wrapped_lines)
             
-        # Calculate x position to center this line
-        line_width = sum(
-            draw.textlength(word + " ", font=body_font) if word_type == "text"
-            else font_size * EMOJI_WIDTH_FACTOR  # emoji width
-            for word_type, word in line
-        )
-        x = (width - line_width) / 2
+            # Add an empty line between paragraphs
+            if len(paragraphs) > 1:
+                processed_paragraphs.append("")
         
-        # Draw the line
-        draw_text_line(img, draw, line, x, y, body_font, font_size)
-        y += line_spacing
+        if processed_paragraphs and not processed_paragraphs[-1]:
+            processed_paragraphs.pop()
+        
+        # Calculate line spacing
+        line_spacing = font_size * LINE_SPACING_FACTOR
+        
+        # Calculate total height of text block
+        text_block_height = len(processed_paragraphs) * line_spacing
+        
+        # Calculate starting y position to center text block vertically
+        y = start_y + (available_height - text_block_height) / 2
+        
+        # Draw each line
+        for line in processed_paragraphs:
+            if not line.strip():
+                y += line_spacing
+                continue
+            
+            logger.info(f"Drawing text line: '{line[:15]}{'...' if len(line) > 15 else ''}'")
+            draw_text_line(img, draw, line, 0, y, font_size, DEFAULT_TEXT_COLOR)
+            y += line_spacing
+    else:
+        logger.info("No main text to process")
     
     return img
