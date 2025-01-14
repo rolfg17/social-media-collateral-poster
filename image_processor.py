@@ -1,14 +1,9 @@
 from PIL import Image, ImageDraw, ImageFont
 import textwrap
 import emoji
-import subprocess
-import re
-from io import BytesIO
 import logging
 from pathlib import Path
 import streamlit as st
-import sys
-from datetime import datetime
 from typing import Tuple, List, Optional, Dict
 
 
@@ -17,7 +12,7 @@ DEFAULT_BACKGROUND_COLOR = (248, 248, 248)
 DEFAULT_TEXT_COLOR = 'black'
 LINE_SPACING_FACTOR = 1.3
 EMOJI_WIDTH_FACTOR = 1.2
-MIN_FONT_SIZE = 20
+MIN_FONT_SIZE = 24
 HEADER_FONT_SCALE = 0.6
 MIN_HEADER_FONT_SIZE = 16
 FALLBACK_SYSTEM_FONT = "/System/Library/Fonts/Helvetica.ttc"
@@ -74,7 +69,7 @@ def load_emoji_font(size: int) -> Optional[ImageFont.FreeTypeFont]:
         for try_size in sizes_to_try:
             try:
                 font = ImageFont.truetype(font_path, try_size)
-                logger.info(f"Successfully loaded emoji font {font_path} at size {try_size}")
+                logger.info(f" Successfully loaded emoji font {font_path} at size {try_size}")
                 return font
             except Exception as e:
                 logger.debug(f"Failed to load emoji font {font_path} at size {try_size}: {e}")
@@ -319,10 +314,10 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
     # Load header/footer font once for consistent sizing
     header_font_size = max(int(font_size * HEADER_FONT_SCALE), MIN_HEADER_FONT_SIZE)
     header_font = load_font(st.session_state.header_font_path, header_font_size)
-    logger.info(f"Header/Footer font loaded with size {header_font_size}")
+    logger.info(f" Header/Footer font loaded with size {header_font_size}")
     
     if header:
-        logger.info(f"Drawing header: '{header}'")
+        logger.info(f" Drawing header: '{header}'")
         header_bbox = draw.textbbox((0, 0), header, font=header_font)
         header_height = header_bbox[3] - header_bbox[1]
         header_width = draw.textlength(header, font=header_font)
@@ -334,7 +329,7 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
         start_y = margin * 2
     
     if footer:
-        logger.info(f"Drawing footer: '{footer}'")
+        logger.info(f"D rawing footer: '{footer}'")
         footer_bbox = draw.textbbox((0, 0), footer, font=header_font)  # Use same header_font
         footer_height = footer_bbox[3] - footer_bbox[1]
         footer_width = draw.textlength(footer, font=header_font)
@@ -347,7 +342,7 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
 
     # Only process main text if it exists
     if text.strip():
-        logger.info(f"Processing main text (length: {len(text)})")
+        logger.info(f" Processing main text (length: {len(text)})")
         text_height, body_font = calculate_text_height(text, font_size, width, draw)
         available_height = end_y - start_y
         
@@ -398,7 +393,7 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
                 y += line_spacing
                 continue
             
-            logger.info(f"Drawing text line: '{line[:15]}{'...' if len(line) > 15 else ''}'")
+            logger.info(f" Drawing text line: '{line[:15]}{'...' if len(line) > 15 else ''}'")
             draw_text_line(img, draw, line, 0, y, font_size, DEFAULT_TEXT_COLOR)
             y += line_spacing
     else:
