@@ -57,37 +57,29 @@ def load_font(font_path: str, font_size: int) -> ImageFont.FreeTypeFont:
 
 def get_emoji_image(emoji_char: str, size: int) -> Optional[Image.Image]:
     """Convert emoji character to PIL Image."""
-    # try:
-    #     result = subprocess.run(['emojirender', emoji_char], capture_output=True, text=True)
-    #     if result.returncode == 0:
-    #         try:
-    #             convert_result = subprocess.run(
-    #                 ['convert', 'svg:-', 'png:-'],
-    #                 input=result.stdout.encode(),
-    #                 capture_output=True
-    #             )
-    #             if convert_result.returncode == 0:
-    #                 img = Image.open(BytesIO(convert_result.stdout))
-    #                 img = img.resize((size, size))
-    #                 return img
-    #         except (subprocess.SubprocessError, IOError) as e:
-    #             logger.warning(f"Failed to convert emoji using ImageMagick: {e}")
-    # except subprocess.SubprocessError as e:
-    #     logger.warning(f"Failed to render emoji using emojirender: {e}")
-    
-    # Fallback: render emoji as text
+    # Use emojirender to get colored emoji (if available on the system)
     try:
         img = Image.new('RGBA', (size, size), (255, 255, 255, 0))
         draw = ImageDraw.Draw(img)
         font = ImageFont.truetype(EMOJI_FONT_PATH, size)
+
+        # Adjusted bounding box for better alignment
         bbox = draw.textbbox((0, 0), emoji_char, font=font)
         x = (size - (bbox[2] - bbox[0])) // 2
         y = (size - (bbox[3] - bbox[1])) // 2
-        draw.text((x, y), emoji_char, font=font, embedded_color=True)
+
+        # Fallback for Apple Emoji Font: disable embedded_color if unsupported
+        try:
+            draw.text((x, y), emoji_char, font=font, embedded_color=True)
+        except TypeError:
+            draw.text((x, y), emoji_char, font=font)
+
         return img
+
     except Exception as e:
         logger.warning(f"Failed to render emoji as text: {e}")
         return None
+
 
 def wrap_paragraph(paragraph: str, max_chars: int) -> List[str]:
     """Wrap a paragraph of text to fit within max_chars per line."""

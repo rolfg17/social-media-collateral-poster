@@ -10,181 +10,159 @@ import re
 import tempfile
 import logging
 from dotenv import load_dotenv
-from image_processor import create_text_image, get_emoji_image  # Import from image_processor
+from image_processor import create_text_image, get_emoji_image, draw_text_line, load_background_image, validate_config, wrap_paragraph, process_text_line, calculate_text_height, load_font  # Import from image_processor
+from config_manager import load_config
+from text_processor import parse_markdown_content, clean_text_for_image
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def load_config():
-    # Clear any existing OpenAI environment variables to prevent using cached keys
-    if 'OPENAI_API_KEY' in os.environ:
-        del os.environ['OPENAI_API_KEY']
-    if 'OPENAI_KEY' in os.environ:  # Clear legacy env var too
-        del os.environ['OPENAI_KEY']
+# def load_config():
+#     # Clear any existing OpenAI environment variables to prevent using cached keys
+#     if 'OPENAI_API_KEY' in os.environ:
+#         del os.environ['OPENAI_API_KEY']
+#     if 'OPENAI_KEY' in os.environ:  # Clear legacy env var too
+#         del os.environ['OPENAI_KEY']
     
-    # Load environment variables from .env
-    load_dotenv()
+#     # Load environment variables from .env
+#     load_dotenv()
     
-    config_path = Path(__file__).parent / 'config.json'
-    with open(config_path, 'r') as f:
-        config = json.load(f)
+#     config_path = Path(__file__).parent / 'config.json'
+#     with open(config_path, 'r') as f:
+#         config = json.load(f)
     
-    # Load paths from environment variables
-    config['obsidian_vault_path'] = os.getenv('OBSIDIAN_VAULT_PATH')
-    config['input_file_path'] = os.getenv('INPUT_FILE_PATH')
+#     # Load paths from environment variables
+#     config['obsidian_vault_path'] = os.getenv('OBSIDIAN_VAULT_PATH')
+#     config['input_file_path'] = os.getenv('INPUT_FILE_PATH')
     
-    # Get API key from .env file
-    api_key = os.getenv('OPENAI_API_KEY')
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY not found in .env file")
+#     # Get API key from .env file
+#     api_key = os.getenv('OPENAI_API_KEY')
+#     if not api_key:
+#         raise ValueError("OPENAI_API_KEY not found in .env file")
     
-    logger.info(f"app.py: Loading OpenAI API key ending with: ...{api_key[-4:]}")
-    config['openai_api_key'] = api_key
+#     logger.info(f"app.py: Loading OpenAI API key ending with: ...{api_key[-4:]}")
+#     config['openai_api_key'] = api_key
     
-    return config
+#     return config
 
-def clean_text_for_image(text):
-    # Remove markdown links - replace [text](url) with just text
-    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+# def clean_text_for_image(text):
+#     # Remove markdown links - replace [text](url) with just text
+#     text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
     
-    # Remove raw URLs with common protocols
-    text = re.sub(r'https?://\S+', '', text)
+#     # Remove raw URLs with common protocols
+#     text = re.sub(r'https?://\S+', '', text)
     
-    # Remove other URL shorteners
-    text = re.sub(r'buff\.ly/\S+', '', text)
-    text = re.sub(r'bit\.ly/\S+', '', text)
-    text = re.sub(r't\.co/\S+', '', text)
+#     # Remove other URL shorteners
+#     text = re.sub(r'buff\.ly/\S+', '', text)
+#     text = re.sub(r'bit\.ly/\S+', '', text)
+#     text = re.sub(r't\.co/\S+', '', text)
     
-    # Remove common URL parameters
-    text = re.sub(r'\?utm_[^&\s]+(&utm_[^&\s]+)*', '', text)
-    text = re.sub(r'\?r=[^&\s]+', '', text)
+#     # Remove common URL parameters
+#     text = re.sub(r'\?utm_[^&\s]+(&utm_[^&\s]+)*', '', text)
+#     text = re.sub(r'\?r=[^&\s]+', '', text)
     
-    # Remove double quotes only (including smart quotes)
-    text = text.replace('"', '').replace('"', '').replace('"', '')  # Smart and regular double quotes
+#     # Remove double quotes only (including smart quotes)
+#     text = text.replace('"', '').replace('"', '').replace('"', '')  # Smart and regular double quotes
     
-    # Remove leading hyphens at the start of sections
-    text = re.sub(r'(?m)^-\s*', '', text)
+#     # Remove leading hyphens at the start of sections
+#     text = re.sub(r'(?m)^-\s*', '', text)
     
-    # Normalize spacing in numbered lists (but preserve numbers)
-    text = re.sub(r'(?m)^(\d+\.)\s+', r'\1 ', text)  # Ensure single space after number
+#     # Normalize spacing in numbered lists (but preserve numbers)
+#     text = re.sub(r'(?m)^(\d+\.)\s+', r'\1 ', text)  # Ensure single space after number
     
-    # Extract hashtags and put them on a new line
-    main_text = []
-    hashtags = []
+#     # Extract hashtags and put them on a new line
+#     main_text = []
+#     hashtags = []
     
-    # First pass: collect all hashtags and clean the text
-    for line in text.split('\n'):
-        # Find all hashtags in the line (including those with hyphens and underscores)
-        tags = re.findall(r'#[a-zA-Z0-9_\-]+(?![a-zA-Z0-9_\-])', line)
+#     # First pass: collect all hashtags and clean the text
+#     for line in text.split('\n'):
+#         # Find all hashtags in the line (including those with hyphens and underscores)
+#         tags = re.findall(r'#[a-zA-Z0-9_\-]+(?![a-zA-Z0-9_\-])', line)
         
-        # Process the line
-        if tags:
-            hashtags.extend(tags)
-            # Remove the hashtags from the line, preserving spacing
-            clean_line = line
-            for tag in tags:
-                clean_line = clean_line.replace(tag, '')
+#         # Process the line
+#         if tags:
+#             hashtags.extend(tags)
+#             # Remove the hashtags from the line, preserving spacing
+#             clean_line = line
+#             for tag in tags:
+#                 clean_line = clean_line.replace(tag, '')
             
-            # Clean up any leftover whitespace and add non-empty lines
-            clean_line = ' '.join(clean_line.split())
-            if clean_line:
-                main_text.append(clean_line)
-        else:
-            if line.strip():
-                main_text.append(line.strip())
+#             # Clean up any leftover whitespace and add non-empty lines
+#             clean_line = ' '.join(clean_line.split())
+#             if clean_line:
+#                 main_text.append(clean_line)
+#         else:
+#             if line.strip():
+#                 main_text.append(line.strip())
     
-    # Join main text with proper line breaks
-    text = '\n'.join(line for line in main_text if line.strip())
+#     # Join main text with proper line breaks
+#     text = '\n'.join(line for line in main_text if line.strip())
     
-    # Add hashtags on a new line with proper spacing
-    if hashtags:
-        # Ensure there's a blank line before hashtags by adding two newlines
-        text = text.rstrip() + '\n\n' + ' '.join(sorted(set(hashtags)))
+#     # Add hashtags on a new line with proper spacing
+#     if hashtags:
+#         # Ensure there's a blank line before hashtags by adding two newlines
+#         text = text.rstrip() + '\n\n' + ' '.join(sorted(set(hashtags)))
     
-    # Clean up any leftover artifacts
-    text = re.sub(r'\s+[.!?]', '.', text)  # Fix floating punctuation
-    text = re.sub(r' {2,}', ' ', text)     # Remove multiple spaces but not newlines
-    text = re.sub(r'[\n\s]*$', '', text)   # Remove trailing whitespace/newlines
-    text = re.sub(r'^[\n\s]*', '', text)   # Remove leading whitespace/newlines
+#     # Clean up any leftover artifacts
+#     text = re.sub(r'\s+[.!?]', '.', text)  # Fix floating punctuation
+#     text = re.sub(r' {2,}', ' ', text)     # Remove multiple spaces but not newlines
+#     text = re.sub(r'[\n\s]*$', '', text)   # Remove trailing whitespace/newlines
+#     text = re.sub(r'^[\n\s]*', '', text)   # Remove leading whitespace/newlines
     
-    # Fix spacing around punctuation
-    text = re.sub(r'\s+([.,!?])', r'\1', text)
+#     # Fix spacing around punctuation
+#     text = re.sub(r'\s+([.,!?])', r'\1', text)
     
-    # Remove empty parentheses that might be left after cleaning
-    text = re.sub(r'\(\s*\)', '', text)
+#     # Remove empty parentheses that might be left after cleaning
+#     text = re.sub(r'\(\s*\)', '', text)
     
-    # Ensure proper spacing between paragraphs
-    text = re.sub(r'\n{3,}', '\n\n', text)  # Replace multiple newlines with double newlines
+#     # Ensure proper spacing between paragraphs
+#     text = re.sub(r'\n{3,}', '\n\n', text)  # Replace multiple newlines with double newlines
     
-    return text.strip()
+#     return text.strip()
 
-def parse_markdown_content(content, config=None):
-    """Parse sections from markdown content string"""
-    sections = {}
-    current_section = None
-    current_content = []
-    in_collaterals = False
-    header_counts = {}  # Keep track of how many times we've seen each header
+# def parse_markdown_content(content, config=None):
+#     """Parse sections from markdown content string"""
+#     sections = {}
+#     current_section = None
+#     current_content = []
+#     in_collaterals = False
+#     header_counts = {}  # Keep track of how many times we've seen each header
     
-    collaterals_header = config.get('collaterals_header', '# Collaterals') if config else '# Collaterals'
+#     collaterals_header = config.get('collaterals_header', '# Collaterals') if config else '# Collaterals'
 
-    lines = content.split('\n')
-    for line in lines:
-        # Start collecting at "# Collaterals"
-        if line.strip() == collaterals_header:
-            in_collaterals = True
-            continue
-        # Stop at next level 1 header
-        elif line.startswith("# ") and in_collaterals:
-            break
-        # Process content only when we're in the Collaterals section
-        elif in_collaterals:
-            if line.startswith("## "):
-                # Save previous section if exists
-                if current_section:
-                    sections[current_section] = '\n'.join(current_content).strip()
-                # Start new section with unique name
-                base_section = line.lstrip("#").strip()
-                if base_section in header_counts:
-                    header_counts[base_section] += 1
-                else:
-                    header_counts[base_section] = 1
-                current_section = f"{base_section} ({header_counts[base_section]})"
-                current_content = []
-            # Add content lines (skip other headers)
-            elif current_section is not None and not line.startswith("#"):
-                current_content.append(line)
+#     lines = content.split('\n')
+#     for line in lines:
+#         # Start collecting at "# Collaterals"
+#         if line.strip() == collaterals_header:
+#             in_collaterals = True
+#             continue
+#         # Stop at next level 1 header
+#         elif line.startswith("# ") and in_collaterals:
+#             break
+#         # Process content only when we're in the Collaterals section
+#         elif in_collaterals:
+#             if line.startswith("## "):
+#                 # Save previous section if exists
+#                 if current_section:
+#                     sections[current_section] = '\n'.join(current_content).strip()
+#                 # Start new section with unique name
+#                 base_section = line.lstrip("#").strip()
+#                 if base_section in header_counts:
+#                     header_counts[base_section] += 1
+#                 else:
+#                     header_counts[base_section] = 1
+#                 current_section = f"{base_section} ({header_counts[base_section]})"
+#                 current_content = []
+#             # Add content lines (skip other headers)
+#             elif current_section is not None and not line.startswith("#"):
+#                 current_content.append(line)
 
-    # Save the last section
-    if current_section and in_collaterals:
-        sections[current_section] = '\n'.join(current_content).strip()
+#     # Save the last section
+#     if current_section and in_collaterals:
+#         sections[current_section] = '\n'.join(current_content).strip()
 
-    return sections
-
-def get_emoji_image(emoji_char, size):
-    # Use emojirender to get colored emoji (if available on the system)
-    try:
-        cmd = ['emojirender', emoji_char, str(size)]
-        result = subprocess.run(cmd, capture_output=True)
-        if result.returncode == 0:
-            img_data = BytesIO(result.stdout)
-            return Image.open(img_data)
-    except:
-        pass
-    
-    # Fallback: try to use system emoji font
-    try:
-        img = Image.new('RGBA', (size, size), (255, 255, 255, 0))
-        draw = ImageDraw.Draw(img)
-        font = ImageFont.truetype('/System/Library/Fonts/Apple Color Emoji.ttc', size)
-        bbox = draw.textbbox((0, 0), emoji_char, font=font)
-        x = (size - (bbox[2] - bbox[0])) // 2
-        y = (size - (bbox[3] - bbox[1])) // 2
-        draw.text((x, y), emoji_char, font=font, embedded_color=True)
-        return img
-    except:
-        return None
+#     return sections
 
 def save_to_photos(image_paths):
     """Save images to Photos app using AppleScript"""
@@ -297,7 +275,12 @@ def handle_file_upload(uploaded_file, config):
         return None
 
 def main():
-    """Main application function"""
+    # Load configuration
+    config = load_config()
+    if not validate_config(config):
+        st.error("Invalid configuration")
+        return
+
     st.set_page_config(page_title="Social Media Collateral Generator", layout="wide")
     
     # Initialize session state
@@ -320,12 +303,12 @@ def main():
     # Title in main area
     st.title("Social Media Collateral Images")
     
-    # Add file uploader with updated help text
-    uploaded_file = st.file_uploader(
-        "Choose a markdown file", 
-        type=['md'], 
-        help="Upload either a newsletter file with a # Prompt section or a pre-generated collaterals file"
-    )
+    # # Add file uploader with updated help text
+    # uploaded_file = st.file_uploader(
+    #     "Choose a markdown file", 
+    #     type=['md'], 
+    #     help="Upload either a newsletter file with a # Prompt section or a pre-generated collaterals file"
+    # )
     
     # Status area for import results
     if st.session_state.import_results:
@@ -344,6 +327,14 @@ def main():
     
     # Create a sidebar for controls
     with st.sidebar:
+
+        # Add file uploader with updated help text
+        uploaded_file = st.file_uploader(
+            "Choose a markdown file", 
+            type=['md'], 
+            help="Upload either a newsletter file with a # Prompt section or a pre-generated collaterals file"
+        )
+
         # Add select all checkbox in sidebar (always visible)
         if st.checkbox("Select All Images", key="select_all_checkbox", value=st.session_state.select_all):
             st.session_state.select_all = True
