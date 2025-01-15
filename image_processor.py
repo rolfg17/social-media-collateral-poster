@@ -588,6 +588,11 @@ class ImageProcessor:
             raise RuntimeError("Body font not loaded. Call load_fonts first.")
         return self.body_font
 
+    def get_text_metrics(self, draw: ImageDraw.Draw, text: str, font: ImageFont.FreeTypeFont) -> Tuple[int, int]:
+        """Get width and height from a single bbox calculation."""
+        bbox = draw.textbbox((0, 0), text, font=font)
+        return bbox[2] - bbox[0], bbox[3] - bbox[1]  # width, height
+
     def create_text_image(self, text: str, config: Optional[Dict[str, Any]] = None, **kwargs) -> Image.Image:
         """Create text image with loaded fonts and optional configuration override."""
         if not (self.header_font and self.body_font):
@@ -621,21 +626,19 @@ class ImageProcessor:
         start_y = margin * 2
         if header:
             logger.info(f"Drawing header: '{header}'")
-            header_bbox = draw.textbbox((0, 0), header, font=header_font)
-            header_height = header_bbox[3] - header_bbox[1]
-            header_x = (width - draw.textlength(header, font=header_font)) // 2
+            text_width, text_height = self.get_text_metrics(draw, header, header_font)
+            header_x = (img.width - text_width) // 2
             header_y = margin
-            draw_centered_text(draw, header, header_x, header_y, header_font, width)
-            start_y = header_y + header_height + margin
+            draw_centered_text(draw, header, header_x, header_y, header_font, img.width)
+            start_y = header_y + text_height + margin
             
         # Process footer if present
         end_y = height - (margin * 2)
         if footer:
             logger.info(f"Drawing footer: '{footer}'")
-            footer_bbox = draw.textbbox((0, 0), footer, font=header_font)
-            footer_height = footer_bbox[3] - footer_bbox[1]
-            footer_y = height - margin - footer_height
-            draw_centered_text(draw, footer, 0, footer_y, header_font, width)
+            text_width, text_height = self.get_text_metrics(draw, footer, header_font)
+            footer_y = img.height - margin - text_height
+            draw_centered_text(draw, footer, 0, footer_y, header_font, img.width)
             end_y = footer_y - margin
             
         # Process main text
