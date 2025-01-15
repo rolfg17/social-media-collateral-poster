@@ -651,8 +651,21 @@ class ImageProcessor:
             available_height = end_y - start_y
             
             # Adjust font size if needed
-            while text_height > available_height and font_size > FONT_CONFIG['MIN_FONT_SIZE']:
-                font_size -= 2
+            if text_height > available_height:
+                min_size = FONT_CONFIG['MIN_FONT_SIZE']
+                max_size = font_size
+                while min_size <= max_size:
+                    mid_size = (min_size + max_size) // 2
+                    body_font = self.get_body_font(mid_size)
+                    text_height = self._calculate_text_height(text, body_font, width, draw)
+                    
+                    if text_height > available_height:
+                        max_size = mid_size - 1
+                    else:
+                        min_size = mid_size + 1
+                
+                # Use the largest size that fits
+                font_size = max_size
                 body_font = self.get_body_font(font_size)
                 text_height = self._calculate_text_height(text, body_font, width, draw)
             
