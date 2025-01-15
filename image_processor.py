@@ -20,7 +20,7 @@ EMOJI_FONT_PATH = "/System/Library/Fonts/Apple Color Emoji.ttc"
 FONT_PATH = "/System/Library/Fonts/Helvetica.ttc"
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)  # Change to DEBUG to see all logs
 logger = logging.getLogger(__name__)
 
 # Constants for font configuration
@@ -66,25 +66,32 @@ def load_emoji_font(size: int) -> Optional[ImageFont.FreeTypeFont]:
     """Load emoji font with multiple fallback attempts."""
     size = max(FONT_CONFIG['MIN_FONT_SIZE'], int(size))
     emoji_fonts = [
-        FONT_CONFIG['EMOJI_FONT_PATH'],
-        "/System/Library/Fonts/AppleColorEmoji.ttf",  # Try alternate path
-        "/System/Library/Fonts/Apple Color Emoji.ttf"  # Another common path
+        "/System/Library/Fonts/Apple Color Emoji.ttc",  # Primary macOS emoji font
+        "/usr/share/fonts/truetype/apple-emoji/Apple Color Emoji.ttc",  # Possible Linux location
+        "/usr/share/fonts/truetype/emoji/NotoColorEmoji.ttf",  # Noto fallback
     ]
     
     # Try different sizes from largest to smallest
-    sizes_to_try = [size, int(size * 0.9), int(size * 0.8), int(size * 0.7)]
+    sizes_to_try = [size, int(size * 0.9), int(size * 0.7), int(size * 0.5)]
+
+    logger.debug(f"Attempting to load emoji font. Paths to try: {emoji_fonts}")
+    logger.debug(f"Font sizes to try: {sizes_to_try}")
     
     for font_path in emoji_fonts:
+        if not Path(font_path).exists():
+            logger.debug(f"Font file not found: {font_path}")
+            continue
+            
+        logger.debug(f"Found font file: {font_path}")
         for try_size in sizes_to_try:
             try:
                 font = ImageFont.truetype(font_path, try_size)
-                logger.info(f" Successfully loaded emoji font {font_path} at size {try_size}")
+                logger.info(f"Successfully loaded emoji font: {font_path} (size: {try_size})")
                 return font
             except Exception as e:
-                logger.debug(f"Failed to load emoji font {font_path} at size {try_size}: {e}")
-                continue
+                logger.debug(f"Failed to load {font_path} at size {try_size}: {str(e)}")
     
-    logger.warning(f"Failed to load any emoji font, falling back to regular font")
+    logger.warning("Failed to load any emoji font. Check if the font files exist and are accessible.")
     return None
 
 def validate_config(config: Optional[Dict[str, str]]) -> bool:
@@ -323,7 +330,7 @@ def load_background_image(config: Dict[str, str], width: int, height: int) -> Im
     # Return a blank image with default color if no image is found
     return Image.new('RGB', (width, height), DEFAULT_BACKGROUND_COLOR)
 
-def draw_text_line(img: Image.Image, draw: ImageDraw.Draw, line: str, x: int, y: float, font_size: int, text_color: str) -> int:
+def draw_text_line(img: Image.Image, draw: ImageDraw.Draw, line: str, x: int, y: float, font_size: int, text_color: str, emoji_font: Optional[ImageFont.FreeTypeFont] = None) -> int:
     """
     Draw a line of text with mixed emoji and regular text.
 
@@ -334,23 +341,30 @@ def draw_text_line(img: Image.Image, draw: ImageDraw.Draw, line: str, x: int, y:
     :param y: Y position of the top-left corner of the text.
     :param font_size: Font size of the text.
     :param text_color: Color of the text.
+    :param emoji_font: Pre-loaded emoji font to use for emoji characters.
     :return: Width of the drawn text.
     """
-    # First calculate total width to center the line
+    i = 0
     total_width = 0
     chars_to_render = []
-    i = 0
-
-    # Load fonts - ensure font size is valid
+    
+    # Load regular font first
     try:
         font_size = max(FONT_CONFIG['MIN_FONT_SIZE'], int(font_size))
         regular_font = load_font(st.session_state.body_font_path, font_size)
-        emoji_font = load_emoji_font(font_size)
-
         logger.info(f"Loaded fonts for line - body font: {st.session_state.body_font_path}, size: {font_size}")
     except OSError as e:
-        logger.error(f"Failed to load fonts: {e}")
+        logger.error(f"Failed to load regular font: {e}")
         return 0
+    
+    # Check if we need emoji font
+    has_emoji = any(emoji.is_emoji(char) or (i + 1 < len(line) and emoji.is_emoji(char + line[i + 1])) 
+                   for i, char in enumerate(line))
+    
+    emoji_font = None
+    if has_emoji:
+        logger.debug(f"Text contains emojis, loading emoji font: {line}")
+        emoji_font = load_emoji_font(font_size)
 
     # First pass: calculate widths and prepare characters
     while i < len(line):
@@ -368,7 +382,8 @@ def draw_text_line(img: Image.Image, draw: ImageDraw.Draw, line: str, x: int, y:
 
         is_emoji = emoji.is_emoji(current_text)
         current_font = emoji_font if is_emoji and emoji_font else regular_font
-
+        
+        # Get text size, with error handling
         try:
             bbox = draw.textbbox((0, 0), current_text, font=current_font)
             text_width = bbox[2] - bbox[0]
@@ -395,8 +410,7 @@ def draw_text_line(img: Image.Image, draw: ImageDraw.Draw, line: str, x: int, y:
             else:
                 draw.text((int(current_x), int(y)), text, font=font, fill=text_color)
         except Exception as e:
-            logger.error(f"Failed to draw text: {e}")
-
+            logger.error(f"Failed to render text '{text}': {e}")
         current_x += width
 
     return total_width
@@ -412,7 +426,10 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
     :param config: Optional configuration dictionary for additional settings.
     :return: Image with the specified text.
     """
-    # Load the background image or create a blank one if not specified
+    if config is None:
+        config = {}
+
+    # Create image and drawing context
     img = load_background_image(config, width, height)
     draw = ImageDraw.Draw(img)
 
@@ -446,11 +463,9 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
         logger.info(f"Drawing footer: '{footer}'")
         footer_bbox = draw.textbbox((0, 0), footer, font=header_font)  # Use the same header font
         footer_height = footer_bbox[3] - footer_bbox[1]
-        footer_width = draw.textlength(footer, font=header_font)
-        footer_x = (width - footer_width) // 2
         footer_y = height - margin - footer_height
+        draw_centered_text(draw, footer, 0, footer_y, header_font, width)
         end_y = footer_y - margin
-        draw_centered_text(draw, footer, footer_x, footer_y, header_font, width)
     else:
         end_y = height - (margin * 2)
 
@@ -516,25 +531,46 @@ class ImageProcessor:
     """Main class for handling image processing operations."""
     
     def __init__(self, config: Dict[str, Any]):
+        """Initialize the ImageProcessor with configuration."""
         self.config = config
         self._validate_config()
+        self._font_cache = {}  # Cache for loaded fonts
         self.header_font = None
         self.body_font = None
-    
-    def _validate_config(self) -> bool:
+        
+    def _validate_config(self):
         """Internal config validation."""
-        return validate_config(self.config)
+        if not validate_config(self.config):
+            raise ValueError("Invalid configuration provided")
+            
+    def _get_cached_font(self, font_path: str, size: int) -> ImageFont.FreeTypeFont:
+        """Get a font from cache or load it if not cached."""
+        cache_key = (font_path, size)
+        if cache_key not in self._font_cache:
+            self._font_cache[cache_key] = load_font(font_path, size)
+        return self._font_cache[cache_key]
     
-    def load_fonts(self, header_path: str, body_path: str, header_font_size: int, body_font_size: int) -> None:
+    def load_fonts(self, header_path: str, body_path: str, header_font_size: int, body_font_size: int):
         """Load header and body fonts with specified paths and sizes."""
-        try:
-            self.header_font = load_font(header_path, header_font_size)
-            self.body_font = load_font(body_path, body_font_size)
-            logger.info(f"Loaded fonts - header: {header_path}, body: {body_path}")
-        except Exception as e:
-            logger.error(f"Failed to load fonts: {e}")
-            raise
-    
+        self.header_font = self._get_cached_font(header_path, header_font_size)
+        self.body_font = self._get_cached_font(body_path, body_font_size)
+        
+    def get_header_font(self, size: Optional[int] = None) -> ImageFont.FreeTypeFont:
+        """Get header font with optional size override."""
+        if size is not None:
+            return self._get_cached_font(self.config.get('header_font_path', FONT_PATH), size)
+        if self.header_font is None:
+            raise RuntimeError("Header font not loaded. Call load_fonts first.")
+        return self.header_font
+        
+    def get_body_font(self, size: Optional[int] = None) -> ImageFont.FreeTypeFont:
+        """Get body font with optional size override."""
+        if size is not None:
+            return self._get_cached_font(self.config.get('body_font_path', FONT_PATH), size)
+        if self.body_font is None:
+            raise RuntimeError("Body font not loaded. Call load_fonts first.")
+        return self.body_font
+
     def create_text_image(self, text: str, config: Optional[Dict[str, Any]] = None, **kwargs) -> Image.Image:
         """Create text image with loaded fonts and optional configuration override."""
         if not (self.header_font and self.body_font):
@@ -548,13 +584,114 @@ class ImageProcessor:
         height = image_config.get('height', 700)  # Default height
         font_size = image_config.get('font_size', 40)  # Default font size
         
-        return create_text_image(
-            text=text,
-            width=width,
-            height=height,
-            font_size=font_size,
-            config=image_config
-        )
+        # Create image and drawing context
+        img = load_background_image(image_config, width, height)
+        draw = ImageDraw.Draw(img)
+        
+        # Get header and footer text
+        header = image_config.get('header', '')
+        footer = image_config.get('footer', '')
+        
+        # Define margin
+        margin = height * 0.05
+        
+        # Calculate header font size and use cached font
+        header_font_size = max(int(font_size * FONT_CONFIG['HEADER_FONT_SCALE']), 
+                             FONT_CONFIG['MIN_HEADER_FONT_SIZE'])
+        header_font = self._get_cached_font(image_config.get('header_font_path', FONT_PATH), header_font_size)
+        
+        # Process header if present
+        start_y = margin * 2
+        if header:
+            logger.info(f"Drawing header: '{header}'")
+            header_bbox = draw.textbbox((0, 0), header, font=header_font)
+            header_height = header_bbox[3] - header_bbox[1]
+            header_x = (width - draw.textlength(header, font=header_font)) // 2
+            header_y = margin
+            draw_centered_text(draw, header, header_x, header_y, header_font, width)
+            start_y = header_y + header_height + margin
+            
+        # Process footer if present
+        end_y = height - (margin * 2)
+        if footer:
+            logger.info(f"Drawing footer: '{footer}'")
+            footer_bbox = draw.textbbox((0, 0), footer, font=header_font)
+            footer_height = footer_bbox[3] - footer_bbox[1]
+            footer_y = height - margin - footer_height
+            draw_centered_text(draw, footer, 0, footer_y, header_font, width)
+            end_y = footer_y - margin
+            
+        # Process main text
+        if text.strip():
+            logger.info(f"Processing main text (length: {len(text)})")
+            body_font = self.get_body_font(font_size)
+            
+            # Calculate initial text height
+            text_height = self._calculate_text_height(text, body_font, width, draw)
+            available_height = end_y - start_y
+            
+            # Adjust font size if needed
+            while text_height > available_height and font_size > FONT_CONFIG['MIN_FONT_SIZE']:
+                font_size -= 2
+                body_font = self.get_body_font(font_size)
+                text_height = self._calculate_text_height(text, body_font, width, draw)
+            
+            # Calculate text wrapping
+            avg_char_width = sum(draw.textlength(char, font=body_font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
+            max_chars = int((width * 0.9) / avg_char_width)
+            
+            # Process and draw text
+            y = start_y + (available_height - text_height) / 2
+            
+            paragraphs = text.split('\n\n')
+            for paragraph in paragraphs:
+                if not paragraph.strip():
+                    y += body_font.size * FONT_CONFIG['LINE_SPACING_FACTOR']
+                    continue
+                    
+                wrapped_lines = wrap_paragraph(paragraph, max_chars)
+                for line in wrapped_lines:
+                    if line.strip():
+                        draw_text_line(img, draw, line, 0, y, font_size, DEFAULT_TEXT_COLOR, 
+                                     self.get_emoji_font(font_size))
+                    y += body_font.size * FONT_CONFIG['LINE_SPACING_FACTOR']
+                
+                # Add extra spacing between paragraphs
+                y += body_font.size * (FONT_CONFIG['LINE_SPACING_FACTOR'] - 1)
+        
+        return img
+        
+    def _calculate_text_height(self, text: str, font: ImageFont.FreeTypeFont, width: int, 
+                             draw: ImageDraw.Draw) -> float:
+        """Calculate the total height needed for the text with the given font."""
+        total_height = 0
+        line_height = font.size * FONT_CONFIG['LINE_SPACING_FACTOR']
+        
+        # Calculate average character width for wrapping
+        avg_char_width = sum(draw.textlength(char, font=font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
+        max_chars = int((width * 0.9) / avg_char_width)
+        
+        paragraphs = text.split('\n\n')
+        for i, paragraph in enumerate(paragraphs):
+            if not paragraph.strip():
+                total_height += line_height
+                continue
+                
+            wrapped_lines = wrap_paragraph(paragraph, max_chars)
+            total_height += len(wrapped_lines) * line_height
+            
+            # Add extra spacing between paragraphs (except last one)
+            if i < len(paragraphs) - 1:
+                total_height += font.size * (FONT_CONFIG['LINE_SPACING_FACTOR'] - 1)
+        
+        return total_height
+        
+    def get_emoji_font(self, size: int) -> Optional[ImageFont.FreeTypeFont]:
+        """Get cached emoji font with the specified size."""
+        cache_key = ('emoji', size)
+        if cache_key not in self._font_cache:
+            self._font_cache[cache_key] = load_emoji_font(size)
+        return self._font_cache[cache_key]
 
 # Public API
 __all__ = [

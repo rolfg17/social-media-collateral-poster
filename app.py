@@ -242,6 +242,10 @@ def main():
     # Update config with header override if provided
     if header_override:
         image_config['header'] = header_override
+        
+    # Add font paths to image config
+    image_config['header_font_path'] = st.session_state.header_font_path
+    image_config['body_font_path'] = st.session_state.body_font_path
     
     # Handle file upload and image generation
     current_file = uploaded_file if uploaded_file is not None else st.session_state.get('file_uploader')
