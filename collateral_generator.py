@@ -6,20 +6,28 @@ import httpx
 import tempfile
 import logging
 from dotenv import load_dotenv
+from config_manager import get_env_api_key
 
 logger = logging.getLogger(__name__)
 
 def get_env_api_key():
     """Get the API key directly from .env to validate against"""
-    # Clear any existing OpenAI environment variables
+    # Clear any existing OpenAI environment variables to ensure we only use .env
     if 'OPENAI_API_KEY' in os.environ:
         del os.environ['OPENAI_API_KEY']
     if 'OPENAI_KEY' in os.environ:
         del os.environ['OPENAI_KEY']
         
     # Load fresh from .env
-    load_dotenv()
-    return os.getenv('OPENAI_API_KEY')
+    dotenv_path = Path(__file__).parent / '.env'
+    if not dotenv_path.exists():
+        raise ValueError(f"Expected .env file at: {dotenv_path}")
+        
+    load_dotenv(dotenv_path)
+    api_key = os.getenv('OPENAI_API_KEY')
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY not found in .env file")
+    return api_key
 
 def extract_prompt_and_content(content):
     """
@@ -55,11 +63,12 @@ def extract_prompt_and_content(content):
 def generate_chatgpt_response(content, prompt, api_key):
     """Generate collaterals using ChatGPT"""
     # Validate that the provided key matches the one in .env
-    env_key = get_env_api_key()
-    if not env_key:
-        raise ValueError("OPENAI_API_KEY not found in .env file")
-    if api_key != env_key:
-        raise ValueError("Provided API key does not match the key in .env file")
+    try:
+        env_key = get_env_api_key()
+        if api_key != env_key:
+            raise ValueError("Provided API key does not match the key in .env file")
+    except Exception as e:
+        raise ValueError(str(e))
         
     logger.info(f"collateral_generator.py: Using OpenAI API key ending with: ...{api_key[-4:]}")
     client = openai.OpenAI(

@@ -6,9 +6,12 @@ This module handles loading and validating the application configuration.
 import json
 from pathlib import Path
 import logging
+from ssl import DefaultVerifyPaths
 from typing import Dict, Any, List
 from dataclasses import dataclass, asdict
 from exceptions import ConfigurationError
+import os
+import dotenv
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +103,12 @@ class Config:
     
     collaterals_header: str = "# Collaterals"
     """Default header text for collaterals."""
+    
+    openai_api_key: str = ""
+    """OpenAI API key for text generation."""
+    
+    obsidian_vault_path: str = ""
+    """Path to the Obsidian vault where collaterals will be saved."""
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Config':
@@ -116,50 +125,65 @@ class Config:
             ConfigurationError: If required fields are missing or invalid.
         """
         try:
-            # Parse font configuration
-            fonts = FontConfig.from_dict(data.get('fonts', {}))
+            # Validate required string fields
+            required_str_fields = ['header', 'footer', 'background_image_path']
+            for field in required_str_fields:
+                if field not in data:
+                    raise ConfigurationError(
+                        f"Missing required field: {field}",
+                        f"The configuration must include a '{field}' value"
+                    )
+                value = data[field]
+                if not isinstance(value, str):
+                    raise ConfigurationError(
+                        f"Invalid type for {field}",
+                        f"Expected string, got {type(value)}"
+                    )
+                if not value.strip():
+                    raise ConfigurationError(
+                        f"Empty {field}",
+                        f"The {field} field cannot be empty"
+                    )
             
-            # Retrieve required configuration fields
-            header = data.get('header')
-            footer = data.get('footer')
-            background_image_path = data.get('background_image_path')
-            
-            if not all([header, footer, background_image_path]):
-                missing = [k for k, v in {'header': header, 'footer': footer, 
-                          'background_image_path': background_image_path}.items() if not v]
-                raise ConfigurationError(
-                    "Missing required configuration fields",
-                    f"Missing fields: {', '.join(missing)}"
-                )
-            
-            # Retrieve optional fields with defaults
+            # Get optional numeric fields with defaults
             width = data.get('width', cls.width)
             height = data.get('height', cls.height)
             font_size = data.get('font_size', cls.font_size)
             collaterals_header = data.get('collaterals_header', cls.collaterals_header)
-
+            openai_api_key = data.get('openai_api_key', cls.openai_api_key)
+            obsidian_vault_path = data.get('obsidian_vault_path', cls.obsidian_vault_path)
+            
             # Validate dimensions and font size
             if width <= 0 or height <= 0:
                 raise ConfigurationError(
                     "Invalid dimensions",
                     f"Width and height must be positive (got {width}x{height})"
                 )
-            
             if font_size <= 0:
                 raise ConfigurationError(
                     "Invalid font size",
                     f"Font size must be positive (got {font_size})"
                 )
-
+                
+            # Validate and create font configuration
+            if 'fonts' not in data:
+                raise ConfigurationError(
+                    "Missing fonts configuration",
+                    "The configuration must include a 'fonts' section"
+                )
+            fonts = FontConfig.from_dict(data['fonts'])
+            
             return cls(
                 fonts=fonts,
-                header=header,
-                footer=footer,
-                background_image_path=background_image_path,
+                header=data['header'],
+                footer=data['footer'],
+                background_image_path=data['background_image_path'],
                 width=width,
                 height=height,
                 font_size=font_size,
-                collaterals_header=collaterals_header
+                collaterals_header=collaterals_header,
+                openai_api_key=openai_api_key,
+                obsidian_vault_path=obsidian_vault_path
             )
         except Exception as e:
             if isinstance(e, ConfigurationError):
@@ -232,7 +256,9 @@ class Config:
             'width': self.width,
             'height': self.height,
             'font_size': self.font_size,
-            'collaterals_header': self.collaterals_header
+            'collaterals_header': self.collaterals_header,
+            'openai_api_key': self.openai_api_key,
+            'obsidian_vault_path': self.obsidian_vault_path
         }
     
     def copy(self) -> Dict[str, Any]:
@@ -243,6 +269,66 @@ class Config:
             Dict[str, Any]: A copy of the configuration data.
         """
         return self.to_dict()
+
+def get_env_api_key() -> str:
+    """Get the API key from .env file only.
+    
+    Returns:
+        str: The OpenAI API key from .env
+        
+    Raises:
+        ConfigurationError: If .env file is missing or API key is not found
+    """
+    # Clear any existing OpenAI environment variables to ensure we only use .env
+    if 'OPENAI_API_KEY' in os.environ:
+        del os.environ['OPENAI_API_KEY']
+    if 'OPENAI_KEY' in os.environ:
+        del os.environ['OPENAI_KEY']
+        
+    # Load fresh from .env
+    dotenv_path = Path(__file__).parent / '.env'
+    if not dotenv_path.exists():
+        raise ConfigurationError(
+            "Missing .env file",
+            f"Expected .env file at: {dotenv_path}"
+        )
+        
+    dotenv.load_dotenv(dotenv_path)
+    api_key = os.getenv('OPENAI_API_KEY')
+    if not api_key:
+        raise ConfigurationError(
+            "Missing OpenAI API key",
+            "OPENAI_API_KEY not found in .env file"
+        )
+    return api_key
+
+
+def get_obsidian_vault_path() -> str:
+    """Get the Obsidian vault path from the config file.
+    
+    Returns:
+        str: The path to the Obsidian vault.
+        
+    Raises:
+        ConfigurationError: If the config file is missing or the vault path is not found
+    """
+    #Load fresh from config file
+    dotenv_path = Path(__file__).parent / '.env'
+    if not dotenv_path.exists():
+        raise ConfigurationError(
+            "Missing .env file",
+            f"Expected .env file at: {dotenv_path}"
+        )
+        
+    dotenv.load_dotenv(dotenv_path)
+    vault_path = os.getenv('OBSIDIAN_VAULT_PATH')
+    if not vault_path:
+        raise ConfigurationError(
+            "Missing Obsidian vault path",
+            "OBSIDIAN_VAULT_PATH not found in .env file"
+        )
+    return vault_path
+
 
 def load_config() -> Config:
     """Load configuration from config.json file.
@@ -264,6 +350,12 @@ def load_config() -> Config:
             
         with open(config_path, 'r') as f:
             data = json.load(f)
+        
+        # Add OpenAI API key from .env file only
+        data['openai_api_key'] = get_env_api_key()
+        
+        # Add Obsidian vault path from .env file only
+        data['obsidian_vault_path'] = get_obsidian_vault_path()
             
         return Config.from_dict(data)
         
