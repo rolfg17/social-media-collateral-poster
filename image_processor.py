@@ -66,13 +66,24 @@ def load_emoji_font(size: int) -> Optional[ImageFont.FreeTypeFont]:
     """Load emoji font with multiple fallback attempts."""
     size = max(FONT_CONFIG['MIN_FONT_SIZE'], int(size))
     emoji_fonts = [
+        EMOJI_FONT_PATH,  # Use the constant defined at the top
         "/System/Library/Fonts/Apple Color Emoji.ttc",  # Primary macOS emoji font
         "/usr/share/fonts/truetype/apple-emoji/Apple Color Emoji.ttc",  # Possible Linux location
         "/usr/share/fonts/truetype/emoji/NotoColorEmoji.ttf",  # Noto fallback
     ]
     
     # Try different sizes from largest to smallest
-    sizes_to_try = [size, int(size * 0.9), int(size * 0.7), int(size * 0.5)]
+    sizes_to_try = [
+        size,                    # 100%
+        int(size * 0.9),        # 90%
+        int(size * 0.8),        # 80%
+        int(size * 0.7),        # 70%
+        int(size * 0.6),        # 60%
+        int(size * 0.5),        # 50%
+        int(size * 0.4),        # 40%
+        int(size * 0.3),        # 30%
+        max(int(size * 0.25), FONT_CONFIG['MIN_FONT_SIZE'])  # 25% but not smaller than min font size
+    ]
 
     logger.debug(f"Attempting to load emoji font. Paths to try: {emoji_fonts}")
     logger.debug(f"Font sizes to try: {sizes_to_try}")
@@ -86,12 +97,13 @@ def load_emoji_font(size: int) -> Optional[ImageFont.FreeTypeFont]:
         for try_size in sizes_to_try:
             try:
                 font = ImageFont.truetype(font_path, try_size)
-                logger.info(f"Successfully loaded emoji font: {font_path} (size: {try_size})")
+                logger.debug(f"Successfully loaded emoji font: {font_path} (size: {try_size})")
                 return font
             except Exception as e:
                 logger.debug(f"Failed to load {font_path} at size {try_size}: {str(e)}")
+                continue
     
-    logger.warning("Failed to load any emoji font. Check if the font files exist and are accessible.")
+    logger.debug("Could not load emoji font, will fall back to regular font for emoji characters")
     return None
 
 def validate_config(config: Optional[Dict[str, str]]) -> bool:
@@ -538,6 +550,11 @@ class ImageProcessor:
         self.header_font = None
         self.body_font = None
         
+        # Validate emoji font availability early
+        emoji_font = load_emoji_font(FONT_CONFIG['MIN_FONT_SIZE'])
+        if emoji_font is None:
+            logger.warning("No valid emoji font found. Emoji support may be limited.")
+            
     def _validate_config(self):
         """Internal config validation."""
         if not validate_config(self.config):
@@ -687,7 +704,7 @@ class ImageProcessor:
         return total_height
         
     def get_emoji_font(self, size: int) -> Optional[ImageFont.FreeTypeFont]:
-        """Get cached emoji font with the specified size."""
+        """Get cached emoji font with the specified size. Returns None if no emoji font is available."""
         cache_key = ('emoji', size)
         if cache_key not in self._font_cache:
             self._font_cache[cache_key] = load_emoji_font(size)
