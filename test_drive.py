@@ -4,18 +4,16 @@ import os
 from drive_manager import DriveManager
 
 # Google Drive folder ID for uploads
-FOLDER_ID = "1hmrwxMI6c-J32_WWeau0PQLtBxF0IUkf"
+FOLDER_ID = os.getenv("FOLDER_ID", "1hmrwxMI6c-J32_WWeau0PQLtBxF0IUkf")
 
 def test_drive_auth():
     """Test Google Drive authentication and file upload."""
-    # Use the downloaded credentials file
-    credentials_path = "client_secret_160267383749-oj19uu5hh14nqequ5bn2uuu52eq4dmj7.apps.googleusercontent.com.json"
-    
-    if not os.path.exists(credentials_path):
-        print(f"Error: Credentials file not found at {credentials_path}")
+    try:
+        drive_manager = DriveManager()
+    except ValueError as e:
+        print(f"Setup error: {str(e)}")
         return False
     
-    drive_manager = DriveManager(credentials_path)
     success = drive_manager.authenticate()
     
     if not success:
@@ -31,8 +29,8 @@ def test_drive_auth():
     
     try:
         # Test file upload
-        print(f"Attempting to upload test file to folder: {FOLDER_ID}")
-        result = drive_manager.upload_file(test_image_path, FOLDER_ID)
+        print("Attempting to upload test file...")
+        result = drive_manager.upload_file(test_image_path)
         
         if result:
             print(f"Upload successful!")

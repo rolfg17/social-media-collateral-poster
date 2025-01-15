@@ -8,6 +8,10 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -19,13 +23,16 @@ SCOPES = ['https://www.googleapis.com/auth/drive.file']
 class DriveManager:
     """Handles Google Drive operations including authentication and file uploads."""
     
-    def __init__(self, credentials_path: str):
-        """Initialize the Drive manager.
+    def __init__(self):
+        """Initialize the Drive manager using environment variables."""
+        self.credentials_path = os.getenv('GOOGLE_CREDENTIALS_PATH')
+        if not self.credentials_path or not os.path.exists(self.credentials_path):
+            raise ValueError("Google credentials file not found. Set GOOGLE_CREDENTIALS_PATH in .env")
         
-        Args:
-            credentials_path: Path to the credentials.json file
-        """
-        self.credentials_path = credentials_path
+        self.folder_id = os.getenv('GOOGLE_DRIVE_FOLDER_ID')
+        if not self.folder_id:
+            raise ValueError("Google Drive folder ID not found. Set GOOGLE_DRIVE_FOLDER_ID in .env")
+        
         self.credentials = None
         self.service = None
     
@@ -61,12 +68,11 @@ class DriveManager:
             logger.error(f"Authentication failed: {str(e)}")
             return False
     
-    def upload_file(self, file_path: str, folder_id: str) -> Optional[Dict[str, Any]]:
+    def upload_file(self, file_path: str) -> Optional[Dict[str, Any]]:
         """Upload a file to Google Drive.
         
         Args:
             file_path: Path to the file to upload
-            folder_id: ID of the folder to upload to
             
         Returns:
             Optional[Dict[str, Any]]: File metadata if successful, None otherwise
@@ -78,7 +84,7 @@ class DriveManager:
             
             file_metadata = {
                 'name': os.path.basename(file_path),
-                'parents': [folder_id]
+                'parents': [self.folder_id]
             }
             
             media = MediaFileUpload(
