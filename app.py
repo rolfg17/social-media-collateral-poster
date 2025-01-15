@@ -7,6 +7,7 @@ import logging
 from image_processor import ImageProcessor, FONT_CONFIG
 from config_manager import load_config
 from text_processor import parse_markdown_content, clean_text_for_image
+from drive_manager import DriveManager
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -19,6 +20,11 @@ class CollateralApp:
         self.config = load_config()
         self.image_processor = ImageProcessor(self.config.to_dict())
         self.initialize_session_state()
+        try:
+            self.drive_manager = DriveManager()
+        except ValueError as e:
+            self.drive_manager = None
+            logger.warning(f"Google Drive integration not available: {str(e)}")
     
     def initialize_session_state(self):
         """Initialize all session state variables."""
@@ -30,6 +36,10 @@ class CollateralApp:
             st.session_state.import_results = None
         if 'show_header_footer' not in st.session_state:
             st.session_state.show_header_footer = True
+        if 'drive_authenticated' not in st.session_state:
+            st.session_state.drive_authenticated = False
+        if 'exported_files' not in st.session_state:
+            st.session_state.exported_files = set()
         
         # Initialize fonts
         if 'header_font_path' not in st.session_state:
@@ -50,8 +60,16 @@ class CollateralApp:
         if st.session_state.import_results:
             with st.expander("Export Results", expanded=True):
                 success_count = sum(1 for result in st.session_state.import_results if result.startswith('✅'))
-                failure_count = len(st.session_state.import_results) - success_count
+                failure_count = len([r for r in st.session_state.import_results if r.startswith('❌')])
                 st.write(f"✅ {success_count} successful exports, ❌ {failure_count} failed exports")
+                
+                # Display each result, with clickable links for Drive exports
+                for result in st.session_state.import_results:
+                    if " - http" in result:  # It's a Drive result with a link
+                        text, link = result.rsplit(" - ", 1)
+                        st.markdown(f"{text} - [View in Drive]({link})")
+                    else:
+                        st.write(result)
             
                 if st.button("Clear Results"):
                     st.session_state.import_results = None
@@ -158,6 +176,50 @@ class CollateralApp:
                 
         return success
 
+    def export_to_drive(self, image_paths):
+        """Export selected images to Google Drive.
+        
+        Args:
+            image_paths: List of paths to images to export
+            
+        Returns:
+            bool: True if all exports were successful
+        """
+        if not self.drive_manager or not st.session_state.drive_authenticated:
+            return False
+            
+        results = []
+        success = True
+        
+        # Initialize exported_files if not present
+        if 'exported_files' not in st.session_state:
+            st.session_state.exported_files = set()
+        
+        for path in image_paths:
+            # Skip if already exported
+            if path in st.session_state.exported_files:
+                results.append(f"⏭️ Already exported: {os.path.basename(path)}")
+                continue
+                
+            try:
+                result = self.drive_manager.upload_file(path)
+                if result:
+                    st.session_state.exported_files.add(path)
+                    results.append(f"✅ Uploaded to Drive: {os.path.basename(path)} - {result.get('webViewLink')}")
+                else:
+                    results.append(f"❌ Failed to upload: {path}")
+                    success = False
+            except Exception as e:
+                results.append(f"❌ Upload failed: {str(e)} - {path}")
+                success = False
+        
+        # Show results in Streamlit
+        if results:
+            st.session_state.import_results = results
+            st.experimental_rerun()
+        
+        return success
+
 def main():
     """Main application entry point."""
     st.set_page_config(page_title="Social Media Collateral Generator", layout="wide")
@@ -189,14 +251,43 @@ def main():
             if st.session_state.select_all:
                 st.session_state.select_all = False
         
-        # Save button
-        if st.button("Save to Photos"):
-            selected_paths = [path for title, path in st.session_state.get('temp_image_paths', [])
-                            if st.session_state.selected_images.get(title, False)]
-            if selected_paths:
-                app.save_to_photos(selected_paths)
+        # Export options
+        st.write("### Export Options")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            # Save to Photos button
+            if st.button("Save to Photos", key="save_to_photos"):
+                selected_paths = [path for title, path in st.session_state.get('temp_image_paths', [])
+                                if st.session_state.selected_images.get(title, False)]
+                if selected_paths:
+                    app.save_to_photos(selected_paths)
+                else:
+                    st.warning("Please select at least one image to save")
+        
+        with col2:
+            # Export to Drive button
+            drive_button_disabled = app.drive_manager is None
+            if drive_button_disabled:
+                st.button("Export to Drive", disabled=True, help="Google Drive integration not configured")
             else:
-                st.warning("Please select at least one image to save")
+                if not st.session_state.drive_authenticated and st.button("Connect Drive"):
+                    with st.spinner("Connecting to Google Drive..."):
+                        if app.drive_manager.authenticate():
+                            st.session_state.drive_authenticated = True
+                            st.success("Connected to Google Drive!")
+                            st.experimental_rerun()
+                        else:
+                            st.error("Failed to connect to Google Drive")
+                
+                elif st.session_state.drive_authenticated and st.button("Export to Drive"):
+                    selected_paths = [path for title, path in st.session_state.get('temp_image_paths', [])
+                                   if st.session_state.selected_images.get(title, False)]
+                    if not selected_paths:
+                        st.warning("Please select at least one image to export")
+                    else:
+                        with st.spinner("Exporting to Google Drive..."):
+                            app.export_to_drive(selected_paths)
         
         # Header override setting
         st.sidebar.subheader("Header Settings")

@@ -3,6 +3,7 @@
 import os
 import logging
 from typing import Optional, Dict, Any
+from datetime import datetime
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
@@ -82,8 +83,14 @@ class DriveManager:
                 if not self.authenticate():
                     return None
             
+            # Add timestamp to filename
+            base_name = os.path.basename(file_path)
+            name_without_ext, ext = os.path.splitext(base_name)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            new_filename = f"{name_without_ext}_{timestamp}{ext}"
+            
             file_metadata = {
-                'name': os.path.basename(file_path),
+                'name': new_filename,
                 'parents': [self.folder_id]
             }
             
