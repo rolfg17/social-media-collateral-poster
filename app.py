@@ -28,6 +28,8 @@ class CollateralApp:
             st.session_state.select_all = False
         if 'import_results' not in st.session_state:
             st.session_state.import_results = None
+        if 'show_header_footer' not in st.session_state:
+            st.session_state.show_header_footer = True
         
         # Initialize fonts
         if 'header_font_path' not in st.session_state:
@@ -199,6 +201,9 @@ def main():
         # Header override setting
         st.sidebar.subheader("Header Settings")
         header_override = st.sidebar.text_input("Override Header", value="", help="Leave empty to use header from config")
+        st.session_state.show_header_footer = st.sidebar.checkbox("Show Header and Footer", 
+                                                                value=st.session_state.show_header_footer,
+                                                                help="Toggle visibility of header and footer text")
         
         # Font settings in sidebar
         st.sidebar.subheader("Font Settings")
@@ -321,7 +326,8 @@ Note:
                     cleaned_content = cleaned_contents[title]
                     image = app.image_processor.create_text_image(
                         text=cleaned_content,
-                        config=image_config
+                        config=image_config,
+                        show_header_footer=st.session_state.show_header_footer
                     )
                     
                     # Save image to temporary file
@@ -364,7 +370,8 @@ Note:
                         cleaned_content = cleaned_contents[title]
                         image = app.image_processor.create_text_image(
                             text=cleaned_content,
-                            config=image_config
+                            config=image_config,
+                            show_header_footer=st.session_state.show_header_footer
                         )
                         
                         # Save image to temporary file

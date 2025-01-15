@@ -38,13 +38,32 @@ FONT_CONFIG = {
 
 # Common text drawing utilities
 def get_font_metrics(draw: ImageDraw.Draw, text: str, font: ImageFont.FreeTypeFont) -> Tuple[int, int]:
-    """Get width and height of text with given font."""
+    """Get width and height of text with given font.
+    
+    Args:
+        draw: ImageDraw object for text measurements
+        text: Text to measure
+        font: Font to use for measurement
+        
+    Returns:
+        Tuple[int, int]: Width and height of the text
+    """
     bbox = draw.textbbox((0, 0), text, font=font)
     return bbox[2] - bbox[0], bbox[3] - bbox[1]
 
 def draw_centered_text(draw: ImageDraw.Draw, text: str, x: int, y: int, font: ImageFont.FreeTypeFont, 
                       width: int, color: str = FONT_CONFIG['DEFAULT_TEXT_COLOR']) -> None:
-    """Draw text centered horizontally at given y position."""
+    """Draw text centered horizontally at given y position.
+    
+    Args:
+        draw: ImageDraw object for drawing
+        text: Text to draw
+        x: Initial x position (will be adjusted for centering)
+        y: Y position to draw at
+        font: Font to use for drawing
+        width: Total width available for centering
+        color: Color to draw the text in
+    """
     text_width, _ = get_font_metrics(draw, text, font)
     x = (width - text_width) // 2
     draw.text((x, y), text, font=font, fill=color)
@@ -175,7 +194,7 @@ def process_text_line(text: str, font_size: int, max_width: int, text_color: str
         
         # Get text size, with error handling
         try:
-            bbox = draw.textbbox((x, y), current_text, font=current_font)
+            bbox = draw.textbbox((0, 0), current_text, font=current_font)
             text_width = bbox[2] - bbox[0]
             text_height = bbox[3] - bbox[1]
         except Exception as e:
@@ -589,12 +608,29 @@ class ImageProcessor:
         return self.body_font
 
     def get_text_metrics(self, draw: ImageDraw.Draw, text: str, font: ImageFont.FreeTypeFont) -> Tuple[int, int]:
-        """Get width and height from a single bbox calculation."""
+        """Get width and height from a single bbox calculation.
+        
+        Args:
+            draw: ImageDraw object for text measurements
+            text: Text to measure
+            font: Font to use for measurement
+        
+        Returns:
+            Tuple[int, int]: Width and height of the text
+        """
         bbox = draw.textbbox((0, 0), text, font=font)
         return bbox[2] - bbox[0], bbox[3] - bbox[1]  # width, height
 
     def get_avg_char_width(self, draw: ImageDraw.Draw, font: ImageFont.FreeTypeFont) -> float:
-        """Calculate and cache average character width for a font."""
+        """Calculate and cache average character width for a font.
+        
+        Args:
+            draw: ImageDraw object for text measurements
+            font: Font to calculate average width for
+        
+        Returns:
+            float: Average width of lowercase letters in the font
+        """
         cache_key = ('avg_width', id(font))
         if cache_key not in self._font_cache:
             # Calculate average width of lowercase letters
@@ -602,8 +638,18 @@ class ImageProcessor:
                                             for char in 'abcdefghijklmnopqrstuvwxyz') / 26
         return self._font_cache[cache_key]
 
-    def create_text_image(self, text: str, config: Optional[Dict[str, Any]] = None, **kwargs) -> Image.Image:
-        """Create text image with loaded fonts and optional configuration override."""
+    def create_text_image(self, text: str, config: Optional[Dict[str, Any]] = None, show_header_footer: bool = True, **kwargs) -> Image.Image:
+        """Create text image with loaded fonts and optional configuration override.
+        
+        Args:
+            text: Text to be added to the image
+            config: Optional configuration dictionary for additional settings
+            show_header_footer: Whether to show header and footer text (default: True)
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            Image.Image: Generated image with text
+        """
         if not (self.header_font and self.body_font):
             raise ValueError("Fonts must be loaded before creating images")
             
@@ -631,9 +677,9 @@ class ImageProcessor:
                              FONT_CONFIG['MIN_HEADER_FONT_SIZE'])
         header_font = self._get_cached_font(image_config.get('header_font_path', FONT_PATH), header_font_size)
         
-        # Process header if present
+        # Process header if present and show_header_footer is True
         start_y = margin * 2
-        if header:
+        if header and show_header_footer:
             logger.info(f"Drawing header: '{header}'")
             text_width, text_height = self.get_text_metrics(draw, header, header_font)
             header_x = (img.width - text_width) // 2
@@ -641,9 +687,9 @@ class ImageProcessor:
             draw_centered_text(draw, header, header_x, header_y, header_font, img.width)
             start_y = header_y + text_height + margin
             
-        # Process footer if present
+        # Process footer if present and show_header_footer is True
         end_y = height - (margin * 2)
-        if footer:
+        if footer and show_header_footer:
             logger.info(f"Drawing footer: '{footer}'")
             text_width, text_height = self.get_text_metrics(draw, footer, header_font)
             footer_y = img.height - margin - text_height
