@@ -593,6 +593,15 @@ class ImageProcessor:
         bbox = draw.textbbox((0, 0), text, font=font)
         return bbox[2] - bbox[0], bbox[3] - bbox[1]  # width, height
 
+    def get_avg_char_width(self, draw: ImageDraw.Draw, font: ImageFont.FreeTypeFont) -> float:
+        """Calculate and cache average character width for a font."""
+        cache_key = ('avg_width', id(font))
+        if cache_key not in self._font_cache:
+            # Calculate average width of lowercase letters
+            self._font_cache[cache_key] = sum(draw.textlength(char, font=font) 
+                                            for char in 'abcdefghijklmnopqrstuvwxyz') / 26
+        return self._font_cache[cache_key]
+
     def create_text_image(self, text: str, config: Optional[Dict[str, Any]] = None, **kwargs) -> Image.Image:
         """Create text image with loaded fonts and optional configuration override."""
         if not (self.header_font and self.body_font):
@@ -670,7 +679,7 @@ class ImageProcessor:
                 text_height = self._calculate_text_height(text, body_font, width, draw)
             
             # Calculate text wrapping
-            avg_char_width = sum(draw.textlength(char, font=body_font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
+            avg_char_width = self.get_avg_char_width(draw, body_font)
             max_chars = int((width * 0.9) / avg_char_width)
             
             # Process and draw text
@@ -701,7 +710,7 @@ class ImageProcessor:
         line_height = font.size * FONT_CONFIG['LINE_SPACING_FACTOR']
         
         # Calculate average character width for wrapping
-        avg_char_width = sum(draw.textlength(char, font=font) for char in 'abcdefghijklmnopqrstuvwxyz') / 26
+        avg_char_width = self.get_avg_char_width(draw, font)
         max_chars = int((width * 0.9) / avg_char_width)
         
         paragraphs = text.split('\n\n')
