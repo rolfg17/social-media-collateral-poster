@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 # If modifying these scopes, delete the file token.json.

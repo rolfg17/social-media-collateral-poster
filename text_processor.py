@@ -5,7 +5,21 @@ import logging
 from typing import Tuple, List, Dict, Any
 from exceptions import TextError
 
+# Set up logging once at module level
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)  # Set logger level to DEBUG
+logger.propagate = False
+
+# Remove any existing handlers
+for handler in logger.handlers[:]:
+    logger.removeHandler(handler)
+
+# Add a handler to show DEBUG messages
+debug_handler = logging.StreamHandler()
+debug_handler.setLevel(logging.DEBUG)
+formatter = logging.Formatter('%(levelname)s: %(message)s')
+debug_handler.setFormatter(formatter)
+logger.addHandler(debug_handler)
 
 def clean_urls(text: str) -> str:
     """Remove URLs and URL-related artifacts from text."""
@@ -32,6 +46,17 @@ def clean_urls(text: str) -> str:
 def clean_markdown(text: str) -> str:
     """Remove markdown formatting while preserving content."""
     try:
+        # Remove markdown highlights (**, _, *, __, ~~)
+        text = text.replace('~~', '')
+        text = text.replace('**', '')
+        text = text.replace('_', '')
+        text = text.replace('*', '')
+        text = text.replace('__', '')
+        text = text.replace('**', '')
+
+        # Replace double hyphens
+        text = text.replace('--', '')
+        
         # Remove double quotes only (including smart quotes)
         text = text.replace('"', '').replace('"', '').replace('"', '')
         

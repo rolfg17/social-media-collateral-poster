@@ -20,7 +20,7 @@ EMOJI_FONT_PATH = "/System/Library/Fonts/Apple Color Emoji.ttc"
 FONT_PATH = "/System/Library/Fonts/Helvetica.ttc"
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)  # Change to DEBUG to see all logs
+logging.basicConfig(level=logging.WARNING)  # Change to WARNING to suppress detailed logs
 logger = logging.getLogger(__name__)
 
 # Constants for font configuration
