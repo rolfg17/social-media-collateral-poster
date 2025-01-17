@@ -87,55 +87,69 @@ class CollateralApp:
         if not st.session_state[f"checkbox_{title}"] and st.session_state.select_all:
             st.session_state.select_all = False
 
-    def save_to_photos(self, image_paths: list) -> list:
-        """Save images to Photos app using AppleScript."""
-        logger.info(f"Saving {len(image_paths)} images to Photos")
+    def save_to_photos(self, titles: list) -> list:
+        """Save images to Photos app using AppleScript.
         
-        results = []
-        for path in image_paths:
-            # Create AppleScript command
-            script = f'''
-            tell application "Photos"
-                activate
-                delay 1
-                import POSIX file "{path}"
-            end tell
-            '''
+        Args:
+            titles: List of image titles to save
             
-            try:
-                # Run AppleScript
-                result = subprocess.run(['osascript', '-e', script], 
-                                     capture_output=True, 
-                                     text=True)
+        Returns:
+            list: List of results for each save operation
+        """
+        logger.info(f"Saving {len(titles)} images to Photos")
+        results = []
+        
+        for title in titles:
+            if title not in st.session_state.images:
+                results.append(f"❌ Failed: Image not found for {title}")
+                continue
                 
-                if result.returncode == 0:
-                    # Save text clipping after successful save to Photos
-                    for title, temp_path in st.session_state.get('temp_image_paths', []):
-                        if temp_path == path:
-                            # Get source filename from either file_uploader or processed_file
-                            source_file = (st.session_state.get('file_uploader', None) or 
-                                         st.session_state.get('processed_file', None))
-                            if source_file:
-                                logger.info(f"Adding text clipping for {title}")
-                                success = self.text_collector.add_clipping(
-                                    source_file=source_file.name,
-                                    image_file=os.path.basename(path),
-                                    text=st.session_state.cleaned_contents[title],
-                                    headline=title,
-                                    timestamp=None  # Will use current time
-                                )
-                                if success:
-                                    results.append(f"✅ Success: Saved image and text for {title}")
-                                else:
-                                    results.append(f"⚠️ Warning: Saved image but failed to save text for {title}")
-                            break
-                else:
-                    logger.error(f"Error importing {path}: {result.stderr}")
-                    results.append(f"❌ Failed: {result.stderr} - {path}")
+            try:
+                # Save image to temporary file for Photos import
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                    st.session_state.images[title].save(tmp.name, format='PNG')
+                    
+                    # Create AppleScript command
+                    script = f'''
+                    tell application "Photos"
+                        activate
+                        delay 1
+                        import POSIX file "{tmp.name}"
+                    end tell
+                    '''
+                    
+                    # Run AppleScript
+                    result = subprocess.run(['osascript', '-e', script], 
+                                         capture_output=True, 
+                                         text=True)
+                    
+                    if result.returncode == 0:
+                        # Get source filename from either file_uploader or processed_file
+                        source_file = (st.session_state.get('file_uploader', None) or 
+                                     st.session_state.get('processed_file', None))
+                        if source_file:
+                            logger.info(f"Adding text clipping for {title}")
+                            success = self.text_collector.add_clipping(
+                                source_file=source_file.name,
+                                image_file=os.path.basename(tmp.name),
+                                text=st.session_state.cleaned_contents[title],
+                                headline=title,
+                                timestamp=None  # Will use current time
+                            )
+                            if success:
+                                results.append(f"✅ Success: Saved image and text for {title}")
+                            else:
+                                results.append(f"⚠️ Warning: Saved image but failed to save text for {title}")
+                    else:
+                        logger.error(f"Error importing {title}: {result.stderr}")
+                        results.append(f"❌ Failed: {result.stderr} - {title}")
+                    
+                    # Clean up temporary file
+                    os.unlink(tmp.name)
                     
             except Exception as e:
                 logger.error(f"Exception in save_to_photos: {str(e)}")
-                results.append(f"❌ Failed: {str(e)} - {path}")
+                results.append(f"❌ Failed: {str(e)} - {title}")
         
         # Store results in session state
         st.session_state.import_results = results
@@ -264,18 +278,13 @@ def main():
             # Save to Photos button
             if st.button("Save to Photos", key="save_to_photos"):
                 logger.info("Save to Photos button clicked")
-                # Get selected image paths
-                selected_paths = [
-                    path for title, path in st.session_state.get('temp_image_paths', []) 
-                    if st.session_state.selected_images.get(title, False)
-                ]
-                logger.info(f"Selected paths: {selected_paths}")
+                # Get selected image titles
+                selected_titles = [title for title, selected in st.session_state.selected_images.items() if selected]
+                logger.info(f"Selected titles: {selected_titles}")
                 
-                if selected_paths:
-                    logger.info(f"Saving {len(selected_paths)} images to Photos")
-                    # Save temp_image_paths to session state for text collector
-                    st.session_state.temp_image_paths = st.session_state.get('temp_image_paths', [])
-                    results = app.save_to_photos(selected_paths)
+                if selected_titles:
+                    logger.info(f"Saving {len(selected_titles)} images to Photos")
+                    results = app.save_to_photos(selected_titles)
                     logger.info(f"Save to photos results: {results}")
                     
                     # Show results
