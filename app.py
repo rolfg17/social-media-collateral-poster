@@ -9,13 +9,24 @@ from image_processor import ImageProcessor, FONT_CONFIG
 from config_manager import load_config
 from text_processor import parse_markdown_content, clean_text_for_image
 from drive_manager import DriveManager
+from text_collector import TextCollector
+import urllib.parse
 
 # Set page config before any other Streamlit commands
 st.set_page_config(page_title="Social Media Collateral Generator", layout="wide")
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True  # Force reconfiguration of the root logger
+)
 logger = logging.getLogger(__name__)
+
+# Test log
+logger.info("=====================================")
+logger.info("Starting application with test log...")
+logger.info("=====================================")
 
 logger.info("\n\n Starting application...")
 logger.info(f"Command line arguments: {sys.argv}")
@@ -32,6 +43,9 @@ class CollateralApp:
         except ValueError as e:
             self.drive_manager = None
             logger.warning(f"Google Drive integration not available: {str(e)}")
+        
+        # Initialize text collector
+        self.text_collector = TextCollector(self.config['obsidian_vault_path'])
     
     def initialize_session_state(self):
         """Initialize all session state variables."""
@@ -40,13 +54,17 @@ class CollateralApp:
         if 'select_all' not in st.session_state:
             st.session_state.select_all = False
         if 'import_results' not in st.session_state:
-            st.session_state.import_results = None
+            st.session_state.import_results = []
         if 'show_header_footer' not in st.session_state:
             st.session_state.show_header_footer = True
         if 'drive_authenticated' not in st.session_state:
             st.session_state.drive_authenticated = False
         if 'exported_files' not in st.session_state:
             st.session_state.exported_files = set()
+        if 'temp_image_paths' not in st.session_state:
+            st.session_state.temp_image_paths = []
+        if 'cleaned_contents' not in st.session_state:
+            st.session_state.cleaned_contents = {}
         
         # Initialize fonts
         if 'header_font_path' not in st.session_state:
@@ -62,126 +80,66 @@ class CollateralApp:
             body_font_size=40
         )
     
-    def show_import_results(self):
-        """Display import results in the UI."""
-        if st.session_state.import_results:
-            with st.expander("Export Results", expanded=True):
-                success_count = sum(1 for result in st.session_state.import_results if result.startswith('✅'))
-                failure_count = len([r for r in st.session_state.import_results if r.startswith('❌')])
-                st.write(f"✅ {success_count} successful exports, ❌ {failure_count} failed exports")
-                
-                # Display each result, with clickable links for Drive exports
-                for result in st.session_state.import_results:
-                    if " - http" in result:  # It's a Drive result with a link
-                        text, link = result.rsplit(" - ", 1)
-                        st.markdown(f"{text} - [View in Drive]({link})")
-                    else:
-                        st.write(result)
-            
-                if st.button("Clear Results"):
-                    st.session_state.import_results = None
-                    st.experimental_rerun()
-    
-    def handle_file_upload(self, uploaded_file):
-        """Process uploaded file and generate collaterals."""
-        try:
-            content = uploaded_file.read().decode()
-            
-            if "# Prompt" in content:
-                return self._process_newsletter(content, uploaded_file)
-            elif "# Collaterals" in content:
-                return content
-            else:
-                st.error("File must contain either '# Prompt' or '# Collaterals' section")
-                return None
-                
-        except Exception as e:
-            st.error(f"Error processing file: {str(e)}")
-            return None
-    
-    def _process_newsletter(self, content, uploaded_file):
-        """Process newsletter content and save to vault."""
-        with st.spinner("Generating collaterals from newsletter..."):
-            try:
-                from collateral_generator import process_and_save_collaterals, save_to_vault
-                
-                # Generate and save collaterals
-                collateral_content = process_and_save_collaterals(content, self.config)
-                vault_path = Path(self.config['obsidian_vault_path'])
-                saved_path = save_to_vault(collateral_content, uploaded_file.name, str(vault_path))
-                
-                # Create and show Obsidian link
-                relative_path = saved_path.relative_to(vault_path)
-                obsidian_url = f"obsidian://open?vault={vault_path.name}&file={relative_path}"
-                st.markdown(
-                    f"✅ Successfully generated and saved collaterals to: "
-                    f'<a href="{obsidian_url}" target="_blank">{saved_path.name}</a>', 
-                    unsafe_allow_html=True
-                )
-                
-                return collateral_content
-                
-            except Exception as e:
-                st.error(f"Error generating collaterals: {str(e)}")
-                return None
-
     def update_selection(self, title):
         """Update selection state and handle select all checkbox"""
         st.session_state.selected_images[title] = st.session_state[f"checkbox_{title}"]
         if not st.session_state[f"checkbox_{title}"] and st.session_state.select_all:
             st.session_state.select_all = False
 
-    def save_to_photos(self, image_paths):
-        """Save images to Photos app using AppleScript"""
-        success = True
-        results = []
+    def save_to_photos(self, image_paths: list) -> list:
+        """Save images to Photos app using AppleScript."""
+        logger.info(f"Saving {len(image_paths)} images to Photos")
         
+        results = []
         for path in image_paths:
-            if not Path(path).exists():
-                logger.error(f"Image file not found: {path}")
-                results.append(f"❌ Failed: File not found - {path}")
-                success = False
-                continue
-                
-            apple_script = f'''
+            # Create AppleScript command
+            script = f'''
             tell application "Photos"
                 activate
                 delay 1
-                try
-                    import POSIX file "{path}"
-                    return "Success"
-                on error errMsg
-                    return "Error: " & errMsg
-                end try
+                import POSIX file "{path}"
             end tell
             '''
             
             try:
-                result = subprocess.run(
-                    ["osascript", "-e", apple_script], 
-                    capture_output=True, 
-                    text=True, 
-                    check=False
-                )
+                # Run AppleScript
+                result = subprocess.run(['osascript', '-e', script], 
+                                     capture_output=True, 
+                                     text=True)
                 
                 if result.returncode == 0:
-                    logger.info(f"Successfully imported {path}")
-                    results.append(f"✅ Success: {path}")
+                    # Save text clipping after successful save to Photos
+                    for title, temp_path in st.session_state.get('temp_image_paths', []):
+                        if temp_path == path:
+                            # Get source filename from either file_uploader or processed_file
+                            source_file = (st.session_state.get('file_uploader', None) or 
+                                         st.session_state.get('processed_file', None))
+                            if source_file:
+                                logger.info(f"Adding text clipping for {title}")
+                                success = self.text_collector.add_clipping(
+                                    source_file=source_file.name,
+                                    image_file=os.path.basename(path),
+                                    text=st.session_state.cleaned_contents[title],
+                                    headline=title,
+                                    timestamp=None  # Will use current time
+                                )
+                                if success:
+                                    results.append(f"✅ Success: Saved image and text for {title}")
+                                else:
+                                    results.append(f"⚠️ Warning: Saved image but failed to save text for {title}")
+                            break
                 else:
                     logger.error(f"Error importing {path}: {result.stderr}")
                     results.append(f"❌ Failed: {result.stderr} - {path}")
-                    success = False
+                    
             except Exception as e:
-                logger.error(f"Exception while importing {path}: {str(e)}")
+                logger.error(f"Exception in save_to_photos: {str(e)}")
                 results.append(f"❌ Failed: {str(e)} - {path}")
-                success = False
         
-        # Show results in Streamlit
-        if results:
-            st.session_state.import_results = results
-            st.experimental_rerun()
-                
-        return success
+        # Store results in session state
+        st.session_state.import_results = results
+        
+        return results
 
     def export_to_drive(self, image_paths):
         """Export selected images to Google Drive.
@@ -213,6 +171,26 @@ class CollateralApp:
                 if result:
                     st.session_state.exported_files.add(path)
                     results.append(f"✅ Uploaded to Drive: {os.path.basename(path)} - {result.get('webViewLink')}")
+                    
+                    # Save text clipping after successful upload to Drive
+                    for title, temp_path in st.session_state.get('temp_image_paths', []):
+                        if temp_path == path:
+                            # Get source filename from either file_uploader or processed_file
+                            source_file = (st.session_state.get('file_uploader', None) or 
+                                         st.session_state.get('processed_file', None))
+                            logger.info(f"Found source file: {source_file.name if source_file else 'None'}")
+                            if source_file:
+                                logger.info(f"Attempting to save clipping for {title} from {source_file.name}")
+                                logger.info(f"Text content length: {len(st.session_state.cleaned_contents[title])}")
+                                self.text_collector.add_clipping(
+                                    source_file=source_file.name,
+                                    image_file=os.path.basename(path),
+                                    text=st.session_state.cleaned_contents[title],
+                                    headline=title,
+                                    timestamp=None  # Will use current time
+                                )
+                                logger.info("Finished add_clipping call")
+                            break
                 else:
                     results.append(f"❌ Failed to upload: {path}")
                     success = False
@@ -223,9 +201,32 @@ class CollateralApp:
         # Show results in Streamlit
         if results:
             st.session_state.import_results = results
-            st.experimental_rerun()
         
         return success
+
+    def handle_file_upload(self, uploaded_file):
+        """Process uploaded file and generate collaterals."""
+        try:
+            content = uploaded_file.read().decode()
+            
+            # Reset file pointer after reading
+            uploaded_file.seek(0)
+            
+            # Store uploaded file in session state
+            st.session_state.file_uploader = uploaded_file
+            
+            if "# Prompt" in content:
+                logger.info("Processing newsletter content")
+                return self._process_newsletter(content, uploaded_file)
+            elif "# Collaterals" in content:
+                return content
+            else:
+                st.error("File must contain either '# Prompt' or '# Collaterals' section")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error processing file: {str(e)}")
+            return None
 
 def main():
     """Main application entry point."""
@@ -234,9 +235,6 @@ def main():
     
     # Title in main area
     st.title("Social Media Collateral Images")
-    
-    # Show any import results
-    app.show_import_results()
     
     # Sidebar
     st.sidebar.title("Settings")
@@ -264,10 +262,28 @@ def main():
         with col1:
             # Save to Photos button
             if st.button("Save to Photos", key="save_to_photos"):
-                selected_paths = [path for title, path in st.session_state.get('temp_image_paths', [])
-                                if st.session_state.selected_images.get(title, False)]
+                logger.info("Save to Photos button clicked")
+                # Get selected image paths
+                selected_paths = [
+                    path for title, path in st.session_state.get('temp_image_paths', []) 
+                    if st.session_state.selected_images.get(title, False)
+                ]
+                logger.info(f"Selected paths: {selected_paths}")
+                
                 if selected_paths:
-                    app.save_to_photos(selected_paths)
+                    logger.info(f"Saving {len(selected_paths)} images to Photos")
+                    # Save temp_image_paths to session state for text collector
+                    st.session_state.temp_image_paths = st.session_state.get('temp_image_paths', [])
+                    results = app.save_to_photos(selected_paths)
+                    logger.info(f"Save to photos results: {results}")
+                    
+                    # Show results
+                    for result in results:
+                        if isinstance(result, subprocess.CompletedProcess):
+                            if result.returncode == 0:
+                                st.success(f"Successfully imported {result.args[-1]}")
+                            else:
+                                st.error(f"Error importing {result.args[-1]}: {result.stderr}")
                 else:
                     st.warning("Please select at least one image to save")
         
@@ -282,12 +298,12 @@ def main():
                         if app.drive_manager.authenticate():
                             st.session_state.drive_authenticated = True
                             st.success("Connected to Google Drive!")
-                            st.experimental_rerun()
+                            st.rerun()
                         else:
                             st.error("Failed to connect to Google Drive")
                 
                 elif st.session_state.drive_authenticated and st.button("Export to Drive"):
-                    selected_paths = [path for title, path in st.session_state.get('temp_image_paths', [])
+                    selected_paths = [path for title, path in st.session_state.get('temp_image_paths', []) 
                                    if st.session_state.selected_images.get(title, False)]
                     if not selected_paths:
                         st.warning("Please select at least one image to export")
@@ -407,6 +423,32 @@ Note:
             sections = st.session_state.processed_sections
             cleaned_contents = st.session_state.cleaned_contents
             
+            # Status area for import results
+            if 'import_results' in st.session_state and st.session_state.import_results:
+                with st.expander("Export Results", expanded=True):
+                    success_count = sum(1 for result in st.session_state.import_results if result.startswith('✅'))
+                    failure_count = len([r for r in st.session_state.import_results if r.startswith('❌')])
+                    st.write(f"✅ {success_count} successful exports, ❌ {failure_count} failed exports")
+                    
+                    # Display each result, with clickable links for Drive exports
+                    for result in st.session_state.import_results:
+                        if " - http" in result:  # It's a Drive result with a link
+                            text, link = result.rsplit(" - ", 1)
+                            st.markdown(f"{text} - [View in Drive]({link})")
+                        else:
+                            st.write(result)
+                    
+                    # Add status message about text clippings
+                    clippings_path = Path(app.config['obsidian_vault_path']) / "text_clippings.json"
+                    if clippings_path.exists():
+                        st.write("✅ Text clippings saved successfully")
+                    else:
+                        st.markdown("❌ Text clippings file not found")
+                    
+                    if st.button("Clear Results"):
+                        st.session_state.import_results = []
+                        st.rerun()
+            
             # Process images in pairs
             sections_items = [(title, content) for title, content in sections.items() if content.strip()]
             temp_image_paths = []
@@ -524,9 +566,18 @@ if __name__ == "__main__":
     import logging
     
     # Set up logging
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        force=True  # Force reconfiguration of the root logger
+    )
     logger = logging.getLogger(__name__)
-    
+
+    # Test log
+    logger.info("=====================================")
+    logger.info("Starting application with test log...")
+    logger.info("=====================================")
+
     logger.info("\n\n Starting application...")
     logger.info(f"Command line arguments: {sys.argv}")
     
@@ -555,7 +606,7 @@ if __name__ == "__main__":
                         read=lambda: content.encode('utf-8'),
                         seek=lambda x: None  # Add mock seek method
                     )
-                    st.session_state.file_uploader = mock_file
+                    st.session_state.processed_file = mock_file  # Store as processed_file instead of file_uploader
                     logger.info("File loaded into session state")
                     # Initialize app and process file without running the main loop
                     app = CollateralApp()
