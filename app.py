@@ -11,6 +11,7 @@ from text_processor import parse_markdown_content, clean_text_for_image
 from drive_manager import DriveManager
 from text_collector import TextCollector
 import urllib.parse
+import io
 
 # Set page config before any other Streamlit commands
 st.set_page_config(page_title="Social Media Collateral Generator", layout="wide")
@@ -61,8 +62,8 @@ class CollateralApp:
             st.session_state.drive_authenticated = False
         if 'exported_files' not in st.session_state:
             st.session_state.exported_files = set()
-        if 'temp_image_paths' not in st.session_state:
-            st.session_state.temp_image_paths = []
+        if 'images' not in st.session_state:
+            st.session_state.images = {}
         if 'cleaned_contents' not in st.session_state:
             st.session_state.cleaned_contents = {}
         
@@ -461,19 +462,15 @@ Note:
                 title, _ = sections_items[i]
                 with col1:
                     st.subheader(title)
-                    # Use cached cleaned content
+                    # Use cached cleaned content and image if available
                     cleaned_content = cleaned_contents[title]
-                    image = app.image_processor.create_text_image(
-                        text=cleaned_content,
-                        config=image_config,
-                        show_header_footer=st.session_state.show_header_footer
-                    )
-                    
-                    # Save image to temporary file
-                    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                        image.save(tmp.name)
-                        temp_image_paths.append((title, tmp.name))
-                    
+                    if title not in st.session_state.images:
+                        image = app.image_processor.create_text_image(
+                            text=cleaned_content,
+                            config=image_config,
+                            show_header_footer=st.session_state.show_header_footer
+                        )
+                        st.session_state.images[title] = image
                     # Initialize this image's state if not present
                     if title not in st.session_state.selected_images:
                         st.session_state.selected_images[title] = st.session_state.select_all
@@ -494,7 +491,7 @@ Note:
                     
                     # Image
                     with img_col:
-                        st.image(tmp.name, use_column_width=True)
+                        st.image(st.session_state.images[title], use_column_width=True)
                     
                     # Show the cleaned text for debugging
                     with st.expander("Show cleaned text"):
@@ -505,18 +502,15 @@ Note:
                     title, _ = sections_items[i + 1]
                     with col2:
                         st.subheader(title)
-                        # Use cached cleaned content
+                        # Use cached cleaned content and image if available
                         cleaned_content = cleaned_contents[title]
-                        image = app.image_processor.create_text_image(
-                            text=cleaned_content,
-                            config=image_config,
-                            show_header_footer=st.session_state.show_header_footer
-                        )
-                        
-                        # Save image to temporary file
-                        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                            image.save(tmp.name)
-                            temp_image_paths.append((title, tmp.name))
+                        if title not in st.session_state.images:
+                            image = app.image_processor.create_text_image(
+                                text=cleaned_content,
+                                config=image_config,
+                                show_header_footer=st.session_state.show_header_footer
+                            )
+                            st.session_state.images[title] = image
                         
                         # Initialize this image's state if not present
                         if title not in st.session_state.selected_images:
@@ -538,14 +532,11 @@ Note:
                         
                         # Image
                         with img_col:
-                            st.image(tmp.name, use_column_width=True)
+                            st.image(st.session_state.images[title], use_column_width=True)
                         
                         # Show the cleaned text for debugging
                         with st.expander("Show cleaned text"):
                             st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
-            
-            # Store temporary image paths in session state
-            st.session_state.temp_image_paths = temp_image_paths
             
             # Cleanup function to remove temporary files
             def cleanup():

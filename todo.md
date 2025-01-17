@@ -18,15 +18,18 @@ put text info and direct link in scheduler table
 
 # next
 
-create a file (json) that includes all texts where the image has been approved/saved. 
-- purpose: finetuning good prompt results
-- put in file ending in "-goodresponses.md"
-
 
 # doing
 
+stop app from re.creating the images too often
+
+
 # done
 
+
+create a file (json) that includes all texts where the image has been approved/saved. 
+- purpose: finetuning good prompt results
+- put in file ending in "-goodresponses.md"
 fix usage of app from shell command 
 add tests to modules' main functions
 fixed caching emoji font caching

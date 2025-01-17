@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 import streamlit as st
 from typing import Tuple, List, Optional, Dict, Any
-
+import tempfile
 
 # Constants
 DEFAULT_BACKGROUND_COLOR = (248, 248, 248)
@@ -472,7 +472,8 @@ def create_text_image(text: str, width: int = 700, height: int = 700, font_size:
     margin = height * 0.05
     
     # Load the font for header/footer with appropriate size scaling
-    header_font_size = max(int(font_size * FONT_CONFIG['HEADER_FONT_SCALE']), FONT_CONFIG['MIN_HEADER_FONT_SIZE'])
+    header_font_size = max(int(font_size * FONT_CONFIG['HEADER_FONT_SCALE']), 
+                         FONT_CONFIG['MIN_HEADER_FONT_SIZE'])
     header_font = load_font(st.session_state.header_font_path, header_font_size)
     logger.info(f"Header/Footer font loaded with size {header_font_size}")
     
@@ -658,7 +659,7 @@ class ImageProcessor:
             **kwargs: Additional keyword arguments
             
         Returns:
-            Image.Image: Generated image with text
+            Image.Image: Generated image
         """
         if not (self.header_font and self.body_font):
             raise ValueError("Fonts must be loaded before creating images")
@@ -738,9 +739,12 @@ class ImageProcessor:
             avg_char_width = self.get_avg_char_width(draw, body_font)
             max_chars = int((width * 0.9) / avg_char_width)
             
-            # Process and draw text
+            logger.info(f"Text Wrapping - Font size: {font_size}, Max chars per line: {max_chars}")
+            
+            # Calculate starting y position to center text vertically
             y = start_y + (available_height - text_height) / 2
             
+            # Process and draw text
             paragraphs = text.split('\n\n')
             for paragraph in paragraphs:
                 if not paragraph.strip():
@@ -748,6 +752,7 @@ class ImageProcessor:
                     continue
                     
                 wrapped_lines = wrap_paragraph(paragraph, max_chars)
+                
                 for line in wrapped_lines:
                     if line.strip():
                         draw_text_line(img, draw, line, 0, y, font_size, DEFAULT_TEXT_COLOR, 
@@ -756,9 +761,11 @@ class ImageProcessor:
                 
                 # Add extra spacing between paragraphs
                 y += body_font.size * (FONT_CONFIG['LINE_SPACING_FACTOR'] - 1)
-        
+        else:
+            logger.info("No main text to process")
+            
         return img
-        
+
     def _calculate_text_height(self, text: str, font: ImageFont.FreeTypeFont, width: int, 
                              draw: ImageDraw.Draw) -> float:
         """Calculate the total height needed for the text with the given font."""
@@ -778,7 +785,7 @@ class ImageProcessor:
             wrapped_lines = wrap_paragraph(paragraph, max_chars)
             total_height += len(wrapped_lines) * line_height
             
-            # Add extra spacing between paragraphs (except last one)
+            # Add extra spacing between paragraphs
             if i < len(paragraphs) - 1:
                 total_height += font.size * (FONT_CONFIG['LINE_SPACING_FACTOR'] - 1)
         
