@@ -4,14 +4,21 @@ import subprocess
 import os
 import tempfile
 import logging
+import sys
 from image_processor import ImageProcessor, FONT_CONFIG
 from config_manager import load_config
 from text_processor import parse_markdown_content, clean_text_for_image
 from drive_manager import DriveManager
 
+# Set page config before any other Streamlit commands
+st.set_page_config(page_title="Social Media Collateral Generator", layout="wide")
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+logger.info("\n\n Starting application...")
+logger.info(f"Command line arguments: {sys.argv}")
 
 class CollateralApp:
     """Main application class for handling social media collateral generation."""
@@ -222,7 +229,6 @@ class CollateralApp:
 
 def main():
     """Main application entry point."""
-    st.set_page_config(page_title="Social Media Collateral Generator", layout="wide")
     
     app = CollateralApp()
     
@@ -542,14 +548,23 @@ if __name__ == "__main__":
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read()
                     logger.info(f"Successfully read file, first 100 chars: {content[:100]}")
-                    # Create a mock uploaded file
+                    # Create a mock uploaded file and store in session state
                     from types import SimpleNamespace
                     mock_file = SimpleNamespace(
                         name=file_path.name,
-                        read=lambda: content.encode('utf-8')
+                        read=lambda: content.encode('utf-8'),
+                        seek=lambda x: None  # Add mock seek method
                     )
                     st.session_state.file_uploader = mock_file
                     logger.info("File loaded into session state")
+                    # Initialize app and process file without running the main loop
+                    app = CollateralApp()
+                    content = app.handle_file_upload(mock_file)
+                    if content:
+                        logger.info("File processed, starting main UI")
+                    else:
+                        logger.error("Failed to process file")
+                    # Don't call main() here, let the script's main entry point handle it
             except Exception as e:
                 logger.error(f"Error reading file: {e}")
         else:
