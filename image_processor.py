@@ -566,14 +566,24 @@ class ImageProcessor:
         self.config = config
         self._validate_config()
         self._font_cache = {}  # Cache for loaded fonts
+        self._emoji_font_cache = {}  # Dedicated cache for emoji fonts
         self.header_font = None
         self.body_font = None
         
-        # Validate emoji font availability early
-        emoji_font = load_emoji_font(FONT_CONFIG['MIN_FONT_SIZE'])
-        if emoji_font is None:
+        # Initialize emoji font cache with common sizes
+        self._initialize_emoji_fonts()
+    
+    def _initialize_emoji_fonts(self):
+        """Pre-load emoji fonts for common sizes."""
+        common_sizes = [12, 14, 16, 18, 20, 24, 32, 40, 48, 56, 64]  # Common font sizes
+        for size in common_sizes:
+            emoji_font = load_emoji_font(size)
+            if emoji_font is not None:
+                self._emoji_font_cache[size] = emoji_font
+        
+        if not self._emoji_font_cache:
             logger.warning("No valid emoji font found. Emoji support may be limited.")
-            
+    
     def _validate_config(self):
         """Internal config validation."""
         if not validate_config(self.config):
@@ -775,11 +785,19 @@ class ImageProcessor:
         return total_height
         
     def get_emoji_font(self, size: int) -> Optional[ImageFont.FreeTypeFont]:
-        """Get cached emoji font with the specified size. Returns None if no emoji font is available."""
-        cache_key = ('emoji', size)
-        if cache_key not in self._font_cache:
-            self._font_cache[cache_key] = load_emoji_font(size)
-        return self._font_cache[cache_key]
+        """Get cached emoji font with the specified size."""
+        size = max(FONT_CONFIG['MIN_FONT_SIZE'], int(size))
+        
+        # Check cache first
+        if size in self._emoji_font_cache:
+            return self._emoji_font_cache[size]
+        
+        # If not in cache, try to load it
+        emoji_font = load_emoji_font(size)
+        if emoji_font is not None:
+            self._emoji_font_cache[size] = emoji_font
+            
+        return emoji_font
 
 # Public API
 __all__ = [
