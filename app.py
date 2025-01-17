@@ -156,11 +156,11 @@ class CollateralApp:
         
         return results
 
-    def export_to_drive(self, image_paths):
+    def export_to_drive(self, titles):
         """Export selected images to Google Drive.
         
         Args:
-            image_paths: List of paths to images to export
+            titles: List of image titles to export
             
         Returns:
             bool: True if all exports were successful
@@ -175,47 +175,51 @@ class CollateralApp:
         if 'exported_files' not in st.session_state:
             st.session_state.exported_files = set()
         
-        for path in image_paths:
-            # Skip if already exported
-            if path in st.session_state.exported_files:
-                results.append(f"⏭️ Already exported: {os.path.basename(path)}")
+        for title in titles:
+            if title not in st.session_state.images:
+                results.append(f"❌ Failed: Image not found for {title}")
+                success = False
                 continue
                 
             try:
-                result = self.drive_manager.upload_file(path)
-                if result:
-                    st.session_state.exported_files.add(path)
-                    results.append(f"✅ Uploaded to Drive: {os.path.basename(path)} - {result.get('webViewLink')}")
+                # Save image to temporary file for Drive upload
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                    st.session_state.images[title].save(tmp.name, format='PNG')
                     
-                    # Save text clipping after successful upload to Drive
-                    for title, temp_path in st.session_state.get('temp_image_paths', []):
-                        if temp_path == path:
-                            # Get source filename from either file_uploader or processed_file
-                            source_file = (st.session_state.get('file_uploader', None) or 
-                                         st.session_state.get('processed_file', None))
-                            logger.info(f"Found source file: {source_file.name if source_file else 'None'}")
-                            if source_file:
-                                logger.info(f"Attempting to save clipping for {title} from {source_file.name}")
-                                logger.info(f"Text content length: {len(st.session_state.cleaned_contents[title])}")
-                                self.text_collector.add_clipping(
-                                    source_file=source_file.name,
-                                    image_file=os.path.basename(path),
-                                    text=st.session_state.cleaned_contents[title],
-                                    headline=title,
-                                    timestamp=None  # Will use current time
-                                )
-                                logger.info("Finished add_clipping call")
-                            break
-                else:
-                    results.append(f"❌ Failed to upload: {path}")
-                    success = False
+                    result = self.drive_manager.upload_file(tmp.name)
+                    if result:
+                        st.session_state.exported_files.add(title)  # Store title instead of path
+                        results.append(f"✅ Uploaded to Drive: {title} - {result.get('webViewLink')}")
+                        
+                        # Save text clipping after successful upload
+                        source_file = (st.session_state.get('file_uploader', None) or 
+                                     st.session_state.get('processed_file', None))
+                        logger.info(f"Found source file: {source_file.name if source_file else 'None'}")
+                        if source_file:
+                            logger.info(f"Attempting to save clipping for {title} from {source_file.name}")
+                            logger.info(f"Text content length: {len(st.session_state.cleaned_contents[title])}")
+                            self.text_collector.add_clipping(
+                                source_file=source_file.name,
+                                image_file=os.path.basename(tmp.name),
+                                text=st.session_state.cleaned_contents[title],
+                                headline=title,
+                                timestamp=None  # Will use current time
+                            )
+                            logger.info("Finished add_clipping call")
+                    else:
+                        results.append(f"❌ Failed to upload: {title}")
+                        success = False
+                    
+                    # Clean up temporary file
+                    os.unlink(tmp.name)
+                    
             except Exception as e:
-                results.append(f"❌ Upload failed: {str(e)} - {path}")
+                logger.error(f"Error in export_to_drive: {str(e)}")
+                results.append(f"❌ Failed: {str(e)} - {title}")
                 success = False
         
-        # Show results in Streamlit
-        if results:
-            st.session_state.import_results = results
+        # Store results in session state
+        st.session_state.import_results = results
         
         return success
 
@@ -313,13 +317,12 @@ def main():
                             st.error("Failed to connect to Google Drive")
                 
                 elif st.session_state.drive_authenticated and st.button("Export to Drive"):
-                    selected_paths = [path for title, path in st.session_state.get('temp_image_paths', []) 
-                                   if st.session_state.selected_images.get(title, False)]
-                    if not selected_paths:
+                    selected_titles = [title for title, selected in st.session_state.selected_images.items() if selected]
+                    if not selected_titles:
                         st.warning("Please select at least one image to export")
                     else:
                         with st.spinner("Exporting to Google Drive..."):
-                            app.export_to_drive(selected_paths)
+                            app.export_to_drive(selected_titles)
         
         # Header override setting
         st.sidebar.subheader("Header Settings")
@@ -461,7 +464,6 @@ Note:
             
             # Process images in pairs
             sections_items = [(title, content) for title, content in sections.items() if content.strip()]
-            temp_image_paths = []
             
             for i in range(0, len(sections_items), 2):
                 # Create a row for each pair of images
@@ -546,18 +548,6 @@ Note:
                         # Show the cleaned text for debugging
                         with st.expander("Show cleaned text"):
                             st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
-            
-            # Cleanup function to remove temporary files
-            def cleanup():
-                for _, path in temp_image_paths:
-                    try:
-                        os.unlink(path)
-                    except:
-                        pass
-            
-            # Register cleanup function
-            import atexit
-            atexit.register(cleanup)
 
 if __name__ == "__main__":
     import sys
