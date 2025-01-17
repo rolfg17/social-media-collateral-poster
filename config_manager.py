@@ -371,3 +371,54 @@ def load_config() -> Config:
             "Failed to load configuration",
             str(e)
         )
+
+def run_tests():
+    """Run tests for config classes."""
+    # Test FontConfig.from_dict
+    font_data = {
+        "header_fonts": ["Helvetica", "Arial"],
+        "body_fonts": ["Helvetica", "Arial"],
+        "paths": {
+            "Helvetica": "/System/Library/Fonts/Helvetica.ttc",
+            "Arial": "/System/Library/Fonts/Helvetica.ttc"  # Using Helvetica as fallback
+        }
+    }
+    font_config = FontConfig.from_dict(font_data)
+    assert font_config.header_fonts == ["Helvetica", "Arial"], "Header fonts should match"
+    assert font_config.body_fonts == ["Helvetica", "Arial"], "Body fonts should match"
+    assert font_config.paths == font_data["paths"], "Font paths should match"
+    print("✓ FontConfig.from_dict test passed")
+
+    # Test Config.from_dict with minimal valid configuration
+    config_data = {
+        "fonts": font_data,
+        "header": "Test Header",
+        "footer": "Test Footer",
+        "background_image_path": "/System/Library/Desktop Pictures/Solid Colors/Solid Gray Light.png",
+        "width": 800,
+        "height": 600,
+        "font_size": 32
+    }
+    config = Config.from_dict(config_data)
+    assert config.header == "Test Header", "Header should match"
+    assert config.width == 800, "Width should match"
+    assert isinstance(config.fonts, FontConfig), "Fonts should be FontConfig instance"
+    print("✓ Config.from_dict test passed")
+
+    # Test Config dictionary access
+    assert config["width"] == 800, "Dictionary access should work"
+    assert config.get("height") == 600, "Get method should work"
+    assert config.get("nonexistent", "default") == "default", "Get with default should work"
+    assert "width" in config, "Contains check should work"
+    print("✓ Config dictionary access test passed")
+
+    # Test Config.to_dict
+    config_dict = config.to_dict()
+    assert config_dict["header"] == "Test Header", "to_dict should preserve header"
+    assert config_dict["fonts"]["header_fonts"] == ["Helvetica", "Arial"], "to_dict should handle nested FontConfig"
+    print("✓ Config.to_dict test passed")
+
+    print("\nAll tests passed successfully!")
+
+if __name__ == "__main__":
+    run_tests()

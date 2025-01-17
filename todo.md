@@ -15,14 +15,18 @@ put text info and direct link in scheduler table
 - then configurable text specific to each collateral
 - work on (json) format to use in the .md files for finer control
 
-# next
+create a file (json) that oncludes all texts where the image has been approved/saved. purpose: finetuning good prompt results
 
+# next
 
 fix usage of app from shell command 
 - export to drive does not seem to work: app hangs, no logs, no errors
 - maybe start over with generating a shell script that retrieves the file, not just the file content
 
+
 # doing
 
 
 # done
+add tests to modules' main functions
+fixed caching emoji font caching

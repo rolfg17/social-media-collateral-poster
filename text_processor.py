@@ -215,3 +215,43 @@ def parse_markdown_content(content: str, config: Dict[str, Any] = None) -> Dict[
         sections[current_section] = '\n'.join(current_content).strip()
 
     return sections
+
+def run_tests():
+    """Run tests for text processing functions.
+    
+    Note: Tests are run sequentially and will stop at the first failure.
+    Only success messages for tests that passed before the failure will be shown.
+    For more detailed test reporting, consider using unittest or pytest."""
+    # Test clean_urls
+    test_url_text = "Check out [my link](https://example.com) and https://another.com?utm_source=test"
+    assert "Check out my link and " == clean_urls(test_url_text)
+    print("✓ clean_urls test passed")
+
+    # Test clean_markdown
+    test_md_text = "**Bold** and _italic_ text with ~~strikethrough~~"
+    assert "Bold and italic text with strikethrough" == clean_markdown(test_md_text)
+    print("✓ clean_markdown test passed")
+
+    # Test process_hashtags
+    test_hashtag_text = "Hello #world! This is a #test-post with #multiple #hashtags"
+    cleaned_text, hashtags = process_hashtags(test_hashtag_text)
+    assert cleaned_text.strip() == "Hello ! This is a with"
+    assert sorted(hashtags) == ["#hashtags", "#multiple", "#test-post", "#world"]
+    print("✓ process_hashtags test passed")
+
+    # Test normalize_spacing
+    test_spacing_text = "Too  many    spaces  and\n\n\nextra\n\n\nlines"
+    assert "Too many spaces and\n\nextra\n\nlines" == normalize_spacing(test_spacing_text)
+    print("✓ normalize_spacing test passed")
+
+    # Test clean_text_for_image
+    test_full_text = "**Hello** [world](https://example.com)!\n#test #python"
+    result = clean_text_for_image(test_full_text)
+    expected = "Hello world!\n\n#python #test"
+    assert result == expected
+    print("✓ clean_text_for_image test passed")
+
+    print("\nAll tests passed successfully!")
+
+if __name__ == "__main__":
+    run_tests()

@@ -806,3 +806,23 @@ __all__ = [
     'validate_config',    # Configuration validation
     'FONT_CONFIG'         # Font configuration constants
 ]
+
+def run_tests():
+    """Run tests for text wrapping function."""
+    # Test wrap_paragraph
+    test_text = "This is a long paragraph that should be wrapped across multiple lines"
+    wrapped = wrap_paragraph(test_text, max_chars=20)
+    assert len(wrapped) > 1, "Text should be wrapped into multiple lines"
+    assert all(len(line) <= 20 for line in wrapped), "All lines should be <= max_chars"
+    print("✓ wrap_paragraph test passed")
+
+    # Test wrap_paragraph with newlines
+    test_text_newlines = "Line 1\nLine 2\nLine 3"
+    wrapped = wrap_paragraph(test_text_newlines, max_chars=20)
+    assert len(wrapped) == 1, "Newlines should be replaced with spaces"
+    print("✓ wrap_paragraph newlines test passed")
+
+    print("\nAll tests passed successfully!")
+
+if __name__ == "__main__":
+    run_tests()
