@@ -285,7 +285,6 @@ class FileUploaderUI:
         )
         
         if uploaded_file:
-            # Store the uploaded file in session state
             if 'processed_file' not in st.session_state or st.session_state.processed_file != uploaded_file:
                 st.session_state.processed_file = uploaded_file
                 logger.info(f"New file uploaded: {uploaded_file.name}")
@@ -331,12 +330,16 @@ class MainContentUI:
     
     def render(self):
         """Render main content UI components."""
-        # Display success message if present
-        if st.session_state.get('success_message'):
-            with st.expander("Success", expanded=True):
-                st.success(st.session_state.success_message)
-                if st.button("Clear"):
-                    st.session_state.success_message = None
+        # Display success message and processing status if present
+        if st.session_state.get('success_message') or 'processed_file' in st.session_state:
+            with st.expander("Status", expanded=True):
+                if st.session_state.get('success_message'):
+                    st.success(st.session_state.success_message)
+                    if st.button("Clear"):
+                        st.session_state.success_message = None
+                
+                if 'processed_file' in st.session_state:
+                    st.info(f"Processing file: {st.session_state.processed_file.name}")
         
         # Create a copy of config to avoid modifying the original
         image_config = self.app.config.copy()
@@ -378,8 +381,6 @@ class MainContentUI:
             logger.info(f"Should reprocess: {should_reprocess}")
         
         if 'processed_file' in st.session_state:
-            st.info(f"Processing file: {st.session_state.processed_file.name}")
-            
             if should_reprocess:
                 logger.info("Processing new content")
                 # Process new content
