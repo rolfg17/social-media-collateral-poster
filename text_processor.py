@@ -185,33 +185,36 @@ def parse_markdown_content(content: str, config: Dict[str, Any] = None) -> Dict[
             # We've reached the Collaterals section
             in_collaterals = True
             continue
-        elif line.startswith("# ") and in_collaterals:
-            # We've reached the end of the Collaterals section
-            break
+        elif line.startswith("# Feel free") or line.startswith("# Note"):
+            # Skip common ending notes
+            continue
         elif in_collaterals:
-            if line.startswith("## "):
+            # Check for any level of header (# through ###)
+            if re.match(r'^#{1,3}\s', line):
                 # We've reached a new section
                 if current_section:
                     # Add the current section to the dictionary
                     sections[current_section] = '\n'.join(current_content).strip()
-                # Get the base section name without number
+                    current_content = []
+                
+                # Get the base section name without number and hashes
                 base_section = line.lstrip("#").strip()
+                
+                # Update counter for this section title
                 if base_section in header_counts:
-                    # Increment the count for this section
                     header_counts[base_section] += 1
+                    current_section = f"{base_section} ({header_counts[base_section]})"
                 else:
-                    # Initialize the count for this section
                     header_counts[base_section] = 1
-                # Create the full section name with number
-                current_section = f"{base_section} ({header_counts[base_section]})"
-                # Reset the content for this section
-                current_content = []
-            elif current_section is not None and not line.startswith("#"):
-                # Add the line to the current section's content
-                current_content.append(line)
+                    current_section = base_section
+                
+                logger.debug(f"Processing section: {current_section}")
+            else:
+                if current_section:
+                    current_content.append(line)
 
-    # Add the last section to the dictionary
-    if current_section and in_collaterals:
+    # Add the last section
+    if current_section and current_content:
         sections[current_section] = '\n'.join(current_content).strip()
 
     return sections

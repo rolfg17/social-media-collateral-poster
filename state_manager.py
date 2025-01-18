@@ -38,8 +38,15 @@ class AppState:
                 logger.warning(f"Attempting to update unknown state key: {key}")
                 continue
             logger.debug(f"Updating state for {key}")
-            self.__dict__[key] = value
-            st.session_state[key] = value
+            # Handle dictionary updates
+            if isinstance(value, dict) and isinstance(self.__dict__[key], dict):
+                logger.debug(f"Merging dictionary for {key}")
+                self.__dict__[key].update(value)
+                st.session_state[key] = self.__dict__[key]
+            else:
+                logger.debug(f"Setting value for {key}")
+                self.__dict__[key] = value
+                st.session_state[key] = value
             
     def get(self, key, default=None):
         """Get a value from the state.

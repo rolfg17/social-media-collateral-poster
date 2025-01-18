@@ -11,6 +11,7 @@ from text_processor import parse_markdown_content, clean_text_for_image
 from drive_manager import DriveManager
 from text_collector import TextCollector
 from state_manager import AppState
+from ui_components import ImageGridUI
 import urllib.parse
 import io
 
@@ -47,8 +48,9 @@ class CollateralApp:
             self.drive_manager = None
             logger.warning(f"Google Drive integration not available: {str(e)}")
         
-        # Initialize text collector
+        # Initialize text collector and UI components
         self.text_collector = TextCollector(self.config['obsidian_vault_path'])
+        self.image_grid = ImageGridUI(self.state, self.image_processor)
     
     def initialize_session_state(self):
         """Initialize all session state variables."""
@@ -228,27 +230,57 @@ class CollateralApp:
 
     def handle_file_upload(self, uploaded_file):
         """Process uploaded file and generate collaterals."""
+        logger.info(f"Processing uploaded file: {uploaded_file.name}")
+        
         try:
-            content = uploaded_file.read().decode()
+            content = uploaded_file.read().decode('utf-8')
+            logger.debug(f"File content length: {len(content)}")
+            logger.debug(f"Content preview: {content[:200]}...")  # Show first 200 chars
             
             # Reset file pointer after reading
             uploaded_file.seek(0)
             
-            # Store uploaded file in session state
-            st.session_state.file_uploader = uploaded_file
-            
             if "# Prompt" in content:
                 logger.info("Processing newsletter content")
-                return self._process_newsletter(content, uploaded_file)
+                sections = self._process_newsletter(content, uploaded_file)
             elif "# Collaterals" in content:
-                return content
+                logger.info("Processing collaterals content")
+                sections = parse_markdown_content(content, self.config)
             else:
+                logger.error("Invalid file format: missing required sections")
                 st.error("File must contain either '# Prompt' or '# Collaterals' section")
                 return None
                 
-        except Exception as e:
-            logger.error(f"Error processing file: {str(e)}")
+            if sections:
+                logger.debug(f"Found {len(sections)} sections")
+                logger.debug(f"Section titles: {list(sections.keys())}")
+                
+                # Clean text for each section
+                cleaned_contents = {}
+                for title, text in sections.items():
+                    logger.debug(f"Cleaning text for section: {title}")
+                    cleaned_contents[title] = clean_text_for_image(text)
+                    logger.debug(f"Cleaned content length for {title}: {len(cleaned_contents[title])}")
+                
+                # Store cleaned contents in state
+                logger.debug("Storing cleaned contents in state")
+                self.state.update(cleaned_contents=cleaned_contents)
+                
+                return sections, cleaned_contents
+            
+            logger.error("No sections found in file")
             return None
+                
+        except Exception as e:
+            logger.error(f"Error processing file: {str(e)}", exc_info=True)
+            st.error(f"Error processing file: {str(e)}")
+            return None
+
+    def update_selection(self, title):
+        """Update selection state and handle select all checkbox"""
+        st.session_state.selected_images[title] = st.session_state[f"checkbox_{title}"]
+        if not st.session_state[f"checkbox_{title}"] and st.session_state.select_all:
+            st.session_state.select_all = False
 
 def main():
     """Main application entry point."""
@@ -258,6 +290,11 @@ def main():
     # Title in main area
     st.title("Social Media Collateral Images")
     
+    # Settings & Info expander
+    with st.expander("Settings & Info", expanded=True):
+        if 'success_message' in st.session_state:
+            st.success(st.session_state.success_message)
+    
     # Sidebar
     st.sidebar.title("Settings")
     with st.sidebar:
@@ -265,8 +302,41 @@ def main():
         uploaded_file = st.file_uploader(
             "Choose a markdown file", 
             type=['md'], 
-            help="Upload either a newsletter file with a # Prompt section or a pre-generated collaterals file"
+            help="Upload either a newsletter file with a # Prompt section or a pre-generated collaterals file",
+            key="file_uploader"
         )
+        
+        if uploaded_file:
+            # Store the uploaded file in session state
+            if 'processed_file' not in st.session_state or st.session_state.processed_file != uploaded_file:
+                st.session_state.processed_file = uploaded_file
+                logger.info(f"New file uploaded: {uploaded_file.name}")
+                try:
+                    content_preview = uploaded_file.read().decode('utf-8')[:200]
+                    uploaded_file.seek(0)  # Reset file pointer
+                    logger.info(f"Content preview: {content_preview}")
+                    
+                    # Process the file
+                    logger.info("Processing uploaded file...")
+                    content = app.handle_file_upload(uploaded_file)
+                    
+                    if content:
+                        sections, cleaned_contents = content
+                        if sections:
+                            logger.info(f"Successfully processed {len(sections)} sections")
+                            # Store processed content
+                            st.session_state.processed_sections = sections
+                            st.session_state.cleaned_contents = cleaned_contents
+                            st.session_state.success_message = f"Successfully processed {len(sections)} sections"
+                        else:
+                            logger.error("No sections found in file")
+                            st.error("No sections found in file")
+                    else:
+                        logger.error("Failed to process file")
+                        st.error("Failed to process file")
+                except Exception as e:
+                    logger.error(f"Error processing file: {str(e)}", exc_info=True)
+                    st.error(f"Error processing file: {str(e)}")
         
         # Select all checkbox
         if st.checkbox("Select All Images", key="select_all_checkbox", value=st.session_state.select_all):
@@ -381,39 +451,37 @@ def main():
     image_config['header_font_path'] = st.session_state.header_font_path
     image_config['body_font_path'] = st.session_state.body_font_path
     
-    # Handle file upload and image generation
-    current_file = uploaded_file if uploaded_file is not None else st.session_state.get('file_uploader')
-    
     # Check if we need to reprocess content by comparing content hash
     should_reprocess = False
-    if current_file:
-        current_content = current_file.read()
-        current_file.seek(0)  # Reset file pointer after reading
+    if 'processed_file' in st.session_state:
+        logger.info(f"Current file detected: {st.session_state.processed_file.name}")
+        current_content = st.session_state.processed_file.read()
+        st.session_state.processed_file.seek(0)  # Reset file pointer after reading
         content_hash = hash(current_content)
+        logger.debug(f"Content hash: {content_hash}")
         
         should_reprocess = (
             'processed_sections' not in st.session_state or  # First time processing
             'last_content_hash' not in st.session_state or  # No hash stored
             st.session_state.last_content_hash != content_hash  # Content changed
         )
+        logger.info(f"Should reprocess: {should_reprocess}")
     
-    if current_file:
-        st.info(f"Processing file: {current_file.name}")
+    if 'processed_file' in st.session_state:
+        st.info(f"Processing file: {st.session_state.processed_file.name}")
         
         if should_reprocess:
+            logger.info("Processing new content")
             # Process new content
-            content = app.handle_file_upload(current_file)
+            content = app.handle_file_upload(st.session_state.processed_file)
             if content:
+                logger.info("Content processed successfully")
                 # Parse and clean content
-                sections = parse_markdown_content(content, image_config)
+                sections, cleaned_contents = content
                 if sections:
+                    logger.info(f"Found {len(sections)} sections")
                     # Cache the processed content and content hash
                     st.session_state.processed_sections = sections
-                    st.session_state.cleaned_contents = {
-                        title: clean_text_for_image(content) 
-                        for title, content in sections.items() 
-                        if content.strip()
-                    }
                     st.session_state.last_content_hash = content_hash
                 else:
                     st.error("""No valid sections found in the markdown file. Please ensure your file follows this structure:
@@ -465,92 +533,32 @@ Note:
                         st.session_state.import_results = []
                         st.rerun()
             
-            # Process images in pairs
-            sections_items = [(title, content) for title, content in sections.items() if content.strip()]
-            
-            for i in range(0, len(sections_items), 2):
-                # Create a row for each pair of images
-                col1, col2 = st.columns(2)
+            # Main content area - render images
+            if 'processed_sections' in st.session_state and 'cleaned_contents' in st.session_state:
+                sections_items = [(title, content) for title, content in st.session_state.processed_sections.items() if content.strip()]
+                logger.info(f"Processing {len(sections_items)} sections")
                 
-                # Process first image in the pair
-                title, _ = sections_items[i]
-                with col1:
-                    st.subheader(title)
-                    # Use cached cleaned content and image if available
-                    cleaned_content = cleaned_contents[title]
-                    if title not in st.session_state.images:
-                        image = app.image_processor.create_text_image(
-                            text=cleaned_content,
-                            config=image_config,
-                            show_header_footer=st.session_state.show_header_footer
-                        )
-                        st.session_state.images[title] = image
-                    # Initialize this image's state if not present
-                    if title not in st.session_state.selected_images:
-                        st.session_state.selected_images[title] = st.session_state.select_all
-                    
-                    # Create checkbox and image container
-                    check_col, img_col = st.columns([1, 10])
-                    
-                    # Checkbox
-                    with check_col:
-                        st.checkbox(
-                            "Select image",
-                            key=f"checkbox_{title}",
-                            value=st.session_state.selected_images.get(title, False),
-                            on_change=app.update_selection,
-                            args=(title,),
-                            label_visibility="collapsed"
-                        )
-                    
-                    # Image
-                    with img_col:
-                        st.image(st.session_state.images[title], use_column_width=True)
-                    
-                    # Show the cleaned text for debugging
-                    with st.expander("Show cleaned text"):
-                        st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
+                for i in range(0, len(sections_items), 2):
+                    pair_titles = [sections_items[i][0]]
+                    if i + 1 < len(sections_items):
+                        pair_titles.append(sections_items[i + 1][0])
+                    logger.debug(f"Rendering image pair: {pair_titles}")
+                    try:
+                        app.image_grid.render_image_pair(pair_titles, st.session_state.cleaned_contents, image_config)
+                        logger.debug(f"Successfully rendered pair: {pair_titles}")
+                    except Exception as e:
+                        logger.error(f"Error rendering pair {pair_titles}: {str(e)}")
+                        st.error(f"Error rendering images: {str(e)}")
                 
-                # Process second image in the pair (if it exists)
-                if i + 1 < len(sections_items):
-                    title, _ = sections_items[i + 1]
-                    with col2:
-                        st.subheader(title)
-                        # Use cached cleaned content and image if available
-                        cleaned_content = cleaned_contents[title]
-                        if title not in st.session_state.images:
-                            image = app.image_processor.create_text_image(
-                                text=cleaned_content,
-                                config=image_config,
-                                show_header_footer=st.session_state.show_header_footer
-                            )
-                            st.session_state.images[title] = image
-                        
-                        # Initialize this image's state if not present
-                        if title not in st.session_state.selected_images:
-                            st.session_state.selected_images[title] = st.session_state.select_all
-                        
-                        # Create checkbox and image container
-                        check_col, img_col = st.columns([1, 10])
-                        
-                        # Checkbox
-                        with check_col:
-                            st.checkbox(
-                                "Select image",
-                                key=f"checkbox_{title}",
-                                value=st.session_state.selected_images.get(title, False),
-                                on_change=app.update_selection,
-                                args=(title,),
-                                label_visibility="collapsed"
-                            )
-                        
-                        # Image
-                        with img_col:
-                            st.image(st.session_state.images[title], use_column_width=True)
-                        
-                        # Show the cleaned text for debugging
-                        with st.expander("Show cleaned text"):
-                            st.text_area("Cleaned text", cleaned_content, height=150, label_visibility="collapsed")
+                # Main content area
+                # with st.expander("Settings & Info", expanded=True):
+                #     if 'success_message' in st.session_state:
+                #         st.success(st.session_state.success_message)
+
+    # Main content area
+    # with st.expander("Settings & Info", expanded=True):
+    #     if 'success_message' in st.session_state:
+    #         st.success(st.session_state.success_message)
 
 if __name__ == "__main__":
     import sys
