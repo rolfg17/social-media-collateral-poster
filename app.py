@@ -10,6 +10,7 @@ from config_manager import load_config
 from text_processor import parse_markdown_content, clean_text_for_image
 from drive_manager import DriveManager
 from text_collector import TextCollector
+from state_manager import AppState
 import urllib.parse
 import io
 
@@ -38,6 +39,7 @@ class CollateralApp:
     def __init__(self):
         self.config = load_config()
         self.image_processor = ImageProcessor(self.config.to_dict())
+        self.state = AppState()
         self.initialize_session_state()
         try:
             self.drive_manager = DriveManager()
@@ -50,6 +52,7 @@ class CollateralApp:
     
     def initialize_session_state(self):
         """Initialize all session state variables."""
+        self.state.sync_with_session()
         if 'selected_images' not in st.session_state:
             st.session_state.selected_images = {}
         if 'select_all' not in st.session_state:
