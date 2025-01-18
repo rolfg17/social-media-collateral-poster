@@ -1,17 +1,18 @@
 import streamlit as st
-from pathlib import Path
-import subprocess
-import os
-import tempfile
 import logging
 import sys
-from image_processor import ImageProcessor, FONT_CONFIG
-from config_manager import load_config
-from text_processor import parse_markdown_content, clean_text_for_image
+import os
+from text_processor import TextProcessor
+from image_processor import ImageProcessor
+from config_manager import ConfigManager
 from drive_manager import DriveManager
 from text_collector import TextCollector
 from state_manager import AppState
-from ui_components import ImageGridUI
+from ui_components import ImageGridUI, FileUploaderUI, ConfigurationUI, ExportOptionsUI, HeaderSettingsUI, MainContentUI
+from file_processor import FileProcessor
+from pathlib import Path
+import subprocess
+import tempfile
 import urllib.parse
 import io
 
@@ -38,9 +39,18 @@ class CollateralApp:
     """Main application class for handling social media collateral generation."""
     
     def __init__(self):
-        self.config = load_config()
-        self.image_processor = ImageProcessor(self.config.to_dict())
+        """Initialize the application."""
         self.state = AppState()
+        self.config = ConfigManager().load_config()
+        self.text_processor = TextProcessor()
+        self.file_processor = FileProcessor(self.text_processor)
+        self.image_processor = ImageProcessor(self.config.to_dict())
+        self.image_grid = ImageGridUI(self.state, self.image_processor)
+        self.file_uploader = FileUploaderUI(self.state, self.file_processor)
+        self.config_ui = ConfigurationUI(self.state, self.config)
+        self.export_ui = ExportOptionsUI(self.state, self)
+        self.header_ui = HeaderSettingsUI(self.state, self.config)
+        self.main_content = MainContentUI(self.state, self)
         self.initialize_session_state()
         try:
             self.drive_manager = DriveManager()
@@ -48,17 +58,14 @@ class CollateralApp:
             self.drive_manager = None
             logger.warning(f"Google Drive integration not available: {str(e)}")
         
-        # Initialize text collector and UI components
+        # Initialize text collector 
         self.text_collector = TextCollector(self.config['obsidian_vault_path'])
-        self.image_grid = ImageGridUI(self.state, self.image_processor)
     
     def initialize_session_state(self):
         """Initialize all session state variables."""
         self.state.sync_with_session()
         if 'selected_images' not in st.session_state:
             st.session_state.selected_images = {}
-        if 'select_all' not in st.session_state:
-            st.session_state.select_all = False
         if 'import_results' not in st.session_state:
             st.session_state.import_results = []
         if 'show_header_footer' not in st.session_state:
@@ -245,7 +252,7 @@ class CollateralApp:
                 sections = self._process_newsletter(content, uploaded_file)
             elif "# Collaterals" in content:
                 logger.info("Processing collaterals content")
-                sections = parse_markdown_content(content, self.config)
+                sections = self.text_processor.parse_markdown_content(content, self.config)
             else:
                 logger.error("Invalid file format: missing required sections")
                 st.error("File must contain either '# Prompt' or '# Collaterals' section")
@@ -259,7 +266,7 @@ class CollateralApp:
                 cleaned_contents = {}
                 for title, text in sections.items():
                     logger.debug(f"Cleaning text for section: {title}")
-                    cleaned_contents[title] = clean_text_for_image(text)
+                    cleaned_contents[title] = self.text_processor.clean_text_for_image(text)
                     logger.debug(f"Cleaned content length for {title}: {len(cleaned_contents[title])}")
                 
                 # Store cleaned contents in state
@@ -285,280 +292,26 @@ class CollateralApp:
 def main():
     """Main application entry point."""
     
+    st.title("Social Media Collateral Poster")
+    
+    # Initialize app
     app = CollateralApp()
     
-    # Title in main area
-    st.title("Social Media Collateral Images")
-    
-    # Settings & Info expander
-    with st.expander("Settings & Info", expanded=True):
-        if 'success_message' in st.session_state:
-            st.success(st.session_state.success_message)
-    
-    # Sidebar
+    # Sidebar title
     st.sidebar.title("Settings")
+    
+    # Render sidebar components
     with st.sidebar:
-        # File uploader
-        uploaded_file = st.file_uploader(
-            "Choose a markdown file", 
-            type=['md'], 
-            help="Upload either a newsletter file with a # Prompt section or a pre-generated collaterals file",
-            key="file_uploader"
-        )
+        # File uploader first
+        app.file_uploader.render()
         
-        if uploaded_file:
-            # Store the uploaded file in session state
-            if 'processed_file' not in st.session_state or st.session_state.processed_file != uploaded_file:
-                st.session_state.processed_file = uploaded_file
-                logger.info(f"New file uploaded: {uploaded_file.name}")
-                try:
-                    content_preview = uploaded_file.read().decode('utf-8')[:200]
-                    uploaded_file.seek(0)  # Reset file pointer
-                    logger.info(f"Content preview: {content_preview}")
-                    
-                    # Process the file
-                    logger.info("Processing uploaded file...")
-                    content = app.handle_file_upload(uploaded_file)
-                    
-                    if content:
-                        sections, cleaned_contents = content
-                        if sections:
-                            logger.info(f"Successfully processed {len(sections)} sections")
-                            # Store processed content
-                            st.session_state.processed_sections = sections
-                            st.session_state.cleaned_contents = cleaned_contents
-                            st.session_state.success_message = f"Successfully processed {len(sections)} sections"
-                        else:
-                            logger.error("No sections found in file")
-                            st.error("No sections found in file")
-                    else:
-                        logger.error("Failed to process file")
-                        st.error("Failed to process file")
-                except Exception as e:
-                    logger.error(f"Error processing file: {str(e)}", exc_info=True)
-                    st.error(f"Error processing file: {str(e)}")
-        
-        # Select all checkbox
-        if st.checkbox("Select All Images", key="select_all_checkbox", value=st.session_state.select_all):
-            st.session_state.select_all = True
-            for title in st.session_state.selected_images:
-                st.session_state.selected_images[title] = True
-        else:
-            if st.session_state.select_all:
-                st.session_state.select_all = False
-        
-        # Export options
-        st.write("### Export Options")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            # Save to Photos button
-            if st.button("Save to Photos", key="save_to_photos"):
-                logger.info("Save to Photos button clicked")
-                # Get selected image titles
-                selected_titles = [title for title, selected in st.session_state.selected_images.items() if selected]
-                logger.info(f"Selected titles: {selected_titles}")
-                
-                if selected_titles:
-                    logger.info(f"Saving {len(selected_titles)} images to Photos")
-                    results = app.save_to_photos(selected_titles)
-                    logger.info(f"Save to photos results: {results}")
-                    
-                    # Show results
-                    for result in results:
-                        if isinstance(result, subprocess.CompletedProcess):
-                            if result.returncode == 0:
-                                st.success(f"Successfully imported {result.args[-1]}")
-                            else:
-                                st.error(f"Error importing {result.args[-1]}: {result.stderr}")
-                else:
-                    st.warning("Please select at least one image to save")
-        
-        with col2:
-            # Export to Drive button
-            drive_button_disabled = app.drive_manager is None
-            if drive_button_disabled:
-                st.button("Export to Drive", disabled=True, help="Google Drive integration not configured")
-            else:
-                if not st.session_state.drive_authenticated and st.button("Connect Drive"):
-                    with st.spinner("Connecting to Google Drive..."):
-                        if app.drive_manager.authenticate():
-                            st.session_state.drive_authenticated = True
-                            st.success("Connected to Google Drive!")
-                            st.rerun()
-                        else:
-                            st.error("Failed to connect to Google Drive")
-                
-                elif st.session_state.drive_authenticated and st.button("Export to Drive"):
-                    selected_titles = [title for title, selected in st.session_state.selected_images.items() if selected]
-                    if not selected_titles:
-                        st.warning("Please select at least one image to export")
-                    else:
-                        with st.spinner("Exporting to Google Drive..."):
-                            app.export_to_drive(selected_titles)
-        
-        # Header override setting
-        st.sidebar.subheader("Header Settings")
-        header_override = st.sidebar.text_input("Override Header", value="", help="Leave empty to use header from config")
-        st.session_state.show_header_footer = st.sidebar.checkbox("Show Header and Footer", 
-                                                                value=st.session_state.show_header_footer,
-                                                                help="Toggle visibility of header and footer text")
-        
-        # Font settings in sidebar
-        st.sidebar.subheader("Font Settings")
-        
-        # Get font configurations from config
-        font_paths = app.config['fonts']['paths']
-        header_fonts = app.config['fonts']['header_fonts']
-        body_fonts = app.config['fonts']['body_fonts']
-        
-        header_font = st.sidebar.selectbox(
-            "Header/Footer Font",
-            header_fonts,
-            index=0
-        )
-        
-        body_font = st.sidebar.selectbox(
-            "Body Font",
-            body_fonts,
-            index=0
-        )
-        
-        # Store font paths in session state
-        st.session_state.header_font_path = font_paths[header_font]
-        st.session_state.body_font_path = font_paths[body_font]
-        
-        # Update loaded fonts when paths change
-        app.image_processor.load_fonts(
-            header_path=st.session_state.header_font_path,
-            body_path=st.session_state.body_font_path,
-            header_font_size=40,  # Default sizes
-            body_font_size=40
-        )
+        # Then other sidebar components
+        app.config_ui.render()
+        app.export_ui.render()
+        app.header_ui.render()
     
-    # Create a copy of config to avoid modifying the original
-    image_config = app.config.copy()
-    
-    # Ensure background_image_path is included
-    if 'background_image_path' not in image_config and hasattr(app.config, 'background_image_path'):
-        image_config['background_image_path'] = app.config.background_image_path
-    
-    # Update config with header override if provided
-    if header_override:
-        image_config['header'] = header_override
-        
-    # Add font paths to image config
-    image_config['header_font_path'] = st.session_state.header_font_path
-    image_config['body_font_path'] = st.session_state.body_font_path
-    
-    # Check if we need to reprocess content by comparing content hash
-    should_reprocess = False
-    if 'processed_file' in st.session_state:
-        logger.info(f"Current file detected: {st.session_state.processed_file.name}")
-        current_content = st.session_state.processed_file.read()
-        st.session_state.processed_file.seek(0)  # Reset file pointer after reading
-        content_hash = hash(current_content)
-        logger.debug(f"Content hash: {content_hash}")
-        
-        should_reprocess = (
-            'processed_sections' not in st.session_state or  # First time processing
-            'last_content_hash' not in st.session_state or  # No hash stored
-            st.session_state.last_content_hash != content_hash  # Content changed
-        )
-        logger.info(f"Should reprocess: {should_reprocess}")
-    
-    if 'processed_file' in st.session_state:
-        st.info(f"Processing file: {st.session_state.processed_file.name}")
-        
-        if should_reprocess:
-            logger.info("Processing new content")
-            # Process new content
-            content = app.handle_file_upload(st.session_state.processed_file)
-            if content:
-                logger.info("Content processed successfully")
-                # Parse and clean content
-                sections, cleaned_contents = content
-                if sections:
-                    logger.info(f"Found {len(sections)} sections")
-                    # Cache the processed content and content hash
-                    st.session_state.processed_sections = sections
-                    st.session_state.last_content_hash = content_hash
-                else:
-                    st.error("""No valid sections found in the markdown file. Please ensure your file follows this structure:
-
-```markdown
-# Collaterals
-## Section Title 1
-Content for section 1...
-
-## Section Title 2
-Content for section 2...
-```
-
-Note: 
-- Must start with '# Collaterals' header
-- Each section must start with '## ' (level 2 header)
-- Content must be placed under each section header
-""")
-                    return
-        
-        # Use cached content if available
-        if 'processed_sections' in st.session_state:
-            sections = st.session_state.processed_sections
-            cleaned_contents = st.session_state.cleaned_contents
-            
-            # Status area for import results
-            if 'import_results' in st.session_state and st.session_state.import_results:
-                with st.expander("Export Results", expanded=True):
-                    success_count = sum(1 for result in st.session_state.import_results if result.startswith('✅'))
-                    failure_count = len([r for r in st.session_state.import_results if r.startswith('❌')])
-                    st.write(f"✅ {success_count} successful exports, ❌ {failure_count} failed exports")
-                    
-                    # Display each result, with clickable links for Drive exports
-                    for result in st.session_state.import_results:
-                        if " - http" in result:  # It's a Drive result with a link
-                            text, link = result.rsplit(" - ", 1)
-                            st.markdown(f"{text} - [View in Drive]({link})")
-                        else:
-                            st.write(result)
-                    
-                    # Add status message about text clippings
-                    clippings_path = Path(app.config['obsidian_vault_path']) / "text_clippings.json"
-                    if clippings_path.exists():
-                        st.write("✅ Text clippings saved successfully")
-                    else:
-                        st.markdown("❌ Text clippings file not found")
-                    
-                    if st.button("Clear Results"):
-                        st.session_state.import_results = []
-                        st.rerun()
-            
-            # Main content area - render images
-            if 'processed_sections' in st.session_state and 'cleaned_contents' in st.session_state:
-                sections_items = [(title, content) for title, content in st.session_state.processed_sections.items() if content.strip()]
-                logger.info(f"Processing {len(sections_items)} sections")
-                
-                for i in range(0, len(sections_items), 2):
-                    pair_titles = [sections_items[i][0]]
-                    if i + 1 < len(sections_items):
-                        pair_titles.append(sections_items[i + 1][0])
-                    logger.debug(f"Rendering image pair: {pair_titles}")
-                    try:
-                        app.image_grid.render_image_pair(pair_titles, st.session_state.cleaned_contents, image_config)
-                        logger.debug(f"Successfully rendered pair: {pair_titles}")
-                    except Exception as e:
-                        logger.error(f"Error rendering pair {pair_titles}: {str(e)}")
-                        st.error(f"Error rendering images: {str(e)}")
-                
-                # Main content area
-                # with st.expander("Settings & Info", expanded=True):
-                #     if 'success_message' in st.session_state:
-                #         st.success(st.session_state.success_message)
-
-    # Main content area
-    # with st.expander("Settings & Info", expanded=True):
-    #     if 'success_message' in st.session_state:
-    #         st.success(st.session_state.success_message)
+    # Render main content
+    app.main_content.render()
 
 if __name__ == "__main__":
     import sys

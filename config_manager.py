@@ -270,6 +270,52 @@ class Config:
         """
         return self.to_dict()
 
+class ConfigManager:
+    """Manages configuration loading and access."""
+    
+    def __init__(self):
+        """Initialize the configuration manager."""
+        pass
+    
+    def load_config(self) -> Config:
+        """
+        Load configuration from config.json file.
+        
+        Returns:
+            Config: Validated configuration object
+            
+        Raises:
+            ConfigurationError: If config file is missing, invalid, or contains errors
+        """
+        try:
+            # Load .env file for API key
+            dotenv.load_dotenv()
+            
+            # Get config file path
+            config_path = Path(__file__).parent / 'config.json'
+            if not config_path.exists():
+                raise ConfigurationError("Config file not found")
+            
+            # Load and parse config file
+            with open(config_path, 'r') as f:
+                config_data = json.load(f)
+            
+            # Create Config instance
+            config = Config.from_dict(config_data)
+            
+            # Load API key from environment
+            config.openai_api_key = get_env_api_key()
+            
+            # Load Obsidian vault path
+            config.obsidian_vault_path = get_obsidian_vault_path()
+            
+            return config
+            
+        except json.JSONDecodeError as e:
+            raise ConfigurationError(f"Invalid JSON in config file: {str(e)}")
+        except Exception as e:
+            raise ConfigurationError(f"Error loading config: {str(e)}")
+
 def get_env_api_key() -> str:
     """Get the API key from .env file only.
     
