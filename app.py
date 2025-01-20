@@ -55,30 +55,35 @@ class CollateralApp:
         """Initialize the application."""
         self.state = AppState()
         self.config = ConfigManager().load_config()
+        
+        # Initialize processors
         self.text_processor = TextProcessor()
         self.file_processor = FileProcessor(self.text_processor)
         self.image_processor = ImageProcessor(self.config.to_dict())
-        self.image_grid = ImageGridUI(self.state, self.image_processor)
+        
+        # Initialize UI components that don't need app reference
         self.config_ui = ConfigurationUI(self.state, self.config)
-        self.export_ui = ExportOptionsUI(self.state, self)
         self.header_ui = HeaderSettingsUI(self.state, self.config)
+        self.file_uploader = FileUploaderUI(self.state, self.file_processor, self)
+        
+        # Initialize UI components that need app reference
+        self.image_grid = ImageGridUI(self.state, self)
         self.main_content = MainContentUI(self.state, self)
-        self.file_uploader = FileUploaderUI(self.state, self.file_processor)
+        self.photos_ui = PhotosUI(self.state, self)
+        self.export_ui = ExportOptionsUI(self.state, self)
+        
         self.initialize_session_state()
         try:
             self.drive_manager = DriveManager()
             self.drive_ui = DriveUI(self.state, self)
-        except ValueError as e:
+        except Exception as e:
+            logger.error(f"Failed to initialize Drive: {e}")
             self.drive_manager = None
             self.drive_ui = None
-            logger.warning(f"Google Drive integration not available: {str(e)}")
         
         # Initialize text collector 
         self.text_collector = TextCollector(self.config['obsidian_vault_path'])
-        
-        # Initialize photos UI
-        self.photos_ui = PhotosUI(self.state, self)
-    
+
     def initialize_session_state(self):
         """Initialize all session state variables."""
         self.state.sync_with_session()
@@ -94,22 +99,23 @@ class CollateralApp:
             st.session_state.exported_files = set()
         if 'images' not in st.session_state:
             st.session_state.images = {}
+        if 'grid_images' not in st.session_state:
+            st.session_state.grid_images = {}
         if 'cleaned_contents' not in st.session_state:
             st.session_state.cleaned_contents = {}
-        
-        # Initialize fonts
+    
+        # Initialize font paths in session state
         if 'header_font_path' not in st.session_state:
-            st.session_state.header_font_path = self.config['fonts']['paths']['Montserrat Light']
+            if self.config.fonts.header_fonts and self.config.fonts.header_fonts[0] in self.config.fonts.paths:
+                st.session_state.header_font_path = self.config.fonts.paths[self.config.fonts.header_fonts[0]]
+            else:
+                st.session_state.header_font_path = "/System/Library/Fonts/Helvetica.ttc"
+                
         if 'body_font_path' not in st.session_state:
-            st.session_state.body_font_path = self.config['fonts']['paths']['FiraSans Regular']
-            
-        # Load fonts with current paths
-        self.image_processor.load_fonts(
-            header_path=st.session_state.header_font_path,
-            body_path=st.session_state.body_font_path,
-            header_font_size=40,  # Default sizes
-            body_font_size=40
-        )
+            if self.config.fonts.body_fonts and self.config.fonts.body_fonts[0] in self.config.fonts.paths:
+                st.session_state.body_font_path = self.config.fonts.paths[self.config.fonts.body_fonts[0]]
+            else:
+                st.session_state.body_font_path = "/System/Library/Fonts/Helvetica.ttc"
 
     def handle_file_upload(self, file):
         """Process uploaded file and generate collaterals.
@@ -141,10 +147,19 @@ def main():
         app.config_ui.render()
         app.export_ui.render()
         app.header_ui.render()
-        app.drive_ui.render()
+        if app.drive_ui:
+            app.drive_ui.render()
     
-    # Render main content
-    app.main_content.render()
+    # Main content area
+    col1, col2 = st.columns([2, 3])
+    
+    # Render main content in first column
+    with col1:
+        app.main_content.render()
+    
+    # Render image grid in second column
+    with col2:
+        app.image_grid.render()
 
 if __name__ == "__main__":
     import sys

@@ -43,23 +43,15 @@ class FileProcessor:
                 logger.debug(f"Processing section: {title}")
                 cleaned_text = self.text_processor.clean_text_for_image(text)
                 cleaned_contents[title] = cleaned_text
-                logger.debug(f"Added cleaned content for section: {title}")
+                
+            logger.debug("Content processing complete")
             
-            logger.debug(f"Final sections: {list(sections.keys())}")
-            logger.debug(f"Final cleaned_contents: {list(cleaned_contents.keys())}")
-            
-            result = {
+            # Return processed content
+            return {
                 'sections': sections,
                 'cleaned_contents': cleaned_contents
             }
             
-            # Verify result before returning
-            if set(result['sections'].keys()) != set(result['cleaned_contents'].keys()):
-                logger.error("Mismatch between sections and cleaned_contents")
-                return None
-                
-            return result
-            
         except Exception as e:
-            logger.error(f"Error processing file: {str(e)}", exc_info=True)
+            logger.error(f"Error processing file: {e}")
             return None

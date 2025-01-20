@@ -27,45 +27,56 @@ class FontConfig:
     
     paths: Dict[str, str]
     """Font paths, keyed by font name."""
-
+    
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'FontConfig':
-        """
-        Create a FontConfig instance from a dictionary.
+        """Create FontConfig from dictionary data."""
+        if not isinstance(data, dict):
+            raise ConfigurationError("Font configuration must be a dictionary")
+            
+        required = ['paths', 'header_fonts', 'body_fonts']
+        missing = [key for key in required if key not in data]
+        if missing:
+            raise ConfigurationError(f"Missing required font configuration keys: {missing}")
+            
+        # Ensure we have lists for fonts
+        header_fonts = data.get('header_fonts', [])
+        body_fonts = data.get('body_fonts', [])
         
-        Args:
-            data (Dict[str, Any]): A dictionary containing font configuration.
+        if not isinstance(header_fonts, list) or not isinstance(body_fonts, list):
+            raise ConfigurationError("Header and body fonts must be lists")
         
-        Returns:
-            FontConfig: An instance of FontConfig.
+        # Validate paths exist
+        paths = data.get('paths', {})
+        if not isinstance(paths, dict):
+            raise ConfigurationError("Font paths must be a dictionary")
+            
+        # Filter out non-existent paths
+        valid_paths = {}
+        for font_name, path in paths.items():
+            if path and os.path.exists(path):
+                valid_paths[font_name] = path
+            else:
+                logger.warning(f"Font file not found: {path} for {font_name}")
         
-        Raises:
-            ConfigurationError: If font files do not exist or required fields are missing.
-        """
-        try:
-            # Extract paths, header fonts, and body fonts from the dictionary
-            paths = data.get('paths', {})
-            header_fonts = data.get('header_fonts', [])
-            body_fonts = data.get('body_fonts', [])
-
-            # Validate that the font paths exist
-            for name, path in paths.items():
-                if not Path(path).is_file():
-                    raise ConfigurationError(
-                        f"Font file not found: {name}",
-                        f"Path does not exist: {path}"
-                    )
-
-            return cls(
-                header_fonts=header_fonts,
-                body_fonts=body_fonts,
-                paths=paths
-            )
-        except KeyError as e:
-            raise ConfigurationError(
-                "Missing required font configuration",
-                f"Missing field: {str(e)}"
-            )
+        # If no valid fonts found, use system font
+        if not valid_paths:
+            fallback_font = "/System/Library/Fonts/Helvetica.ttc"
+            if os.path.exists(fallback_font):
+                valid_paths["System-Fallback"] = fallback_font
+                if not header_fonts:
+                    header_fonts = ["System-Fallback"]
+                if not body_fonts:
+                    body_fonts = ["System-Fallback"]
+                logger.info(f"Using system fallback font: {fallback_font}")
+            else:
+                logger.error("System fallback font not found!")
+        
+        return cls(
+            header_fonts=header_fonts,
+            body_fonts=body_fonts,
+            paths=valid_paths
+        )
     
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -271,50 +282,41 @@ class Config:
         return self.to_dict()
 
 class ConfigManager:
-    """Manages configuration loading and access."""
+    """Configuration manager for the application."""
     
-    def __init__(self):
+    def __init__(self, config_path: str = "config.json"):
         """Initialize the configuration manager."""
-        pass
-    
-    def load_config(self) -> Config:
-        """
-        Load configuration from config.json file.
+        self.config_path = config_path
+        self._config = None
         
-        Returns:
-            Config: Validated configuration object
+    def load_config(self) -> Config:
+        """Load configuration from file."""
+        if not os.path.exists(self.config_path):
+            raise ConfigurationError(f"Configuration file not found: {self.config_path}")
             
-        Raises:
-            ConfigurationError: If config file is missing, invalid, or contains errors
-        """
         try:
-            # Load .env file for API key
-            dotenv.load_dotenv()
-            
-            # Get config file path
-            config_path = Path(__file__).parent / 'config.json'
-            if not config_path.exists():
-                raise ConfigurationError("Config file not found")
-            
-            # Load and parse config file
-            with open(config_path, 'r') as f:
+            with open(self.config_path, 'r') as f:
                 config_data = json.load(f)
             
-            # Create Config instance
-            config = Config.from_dict(config_data)
+            # Validate and expand font paths
+            if 'fonts' in config_data:
+                font_paths = config_data['fonts'].get('paths', {})
+                expanded_paths = {}
+                for name, path in font_paths.items():
+                    expanded_path = os.path.expanduser(path)
+                    if os.path.exists(expanded_path):
+                        expanded_paths[name] = expanded_path
+                    else:
+                        logger.warning(f"Font file not found: {expanded_path}")
+                config_data['fonts']['paths'] = expanded_paths
             
-            # Load API key from environment
-            config.openai_api_key = get_env_api_key()
-            
-            # Load Obsidian vault path
-            config.obsidian_vault_path = get_obsidian_vault_path()
-            
-            return config
+            self._config = Config.from_dict(config_data)
+            return self._config
             
         except json.JSONDecodeError as e:
-            raise ConfigurationError(f"Invalid JSON in config file: {str(e)}")
+            raise ConfigurationError(f"Invalid JSON in config file: {e}")
         except Exception as e:
-            raise ConfigurationError(f"Error loading config: {str(e)}")
+            raise ConfigurationError(f"Error loading config: {e}")
 
 def get_env_api_key() -> str:
     """Get the API key from .env file only.
