@@ -683,7 +683,7 @@ class ImageProcessor:
         # Define margin
         margin = height * 0.05
         
-        # Calculate header font size and use cached font
+        # Load the font for header/footer with appropriate size scaling
         header_font_size = max(int(font_size * FONT_CONFIG['HEADER_FONT_SCALE']), 
                              FONT_CONFIG['MIN_HEADER_FONT_SIZE'])
         header_font = self._get_cached_font(image_config.get('header_font_path', FONT_PATH), header_font_size)
@@ -741,26 +741,42 @@ class ImageProcessor:
             
             logger.info(f"Text Wrapping - Font size: {font_size}, Max chars per line: {max_chars}")
             
-            # Calculate starting y position to center text vertically
-            y = start_y + (available_height - text_height) / 2
-            
-            # Process and draw text
+            # Split text into paragraphs and wrap each one
             paragraphs = text.split('\n\n')
+            processed_paragraphs = []
+            
             for paragraph in paragraphs:
                 if not paragraph.strip():
-                    y += body_font.size * FONT_CONFIG['LINE_SPACING_FACTOR']
+                    processed_paragraphs.append("")
                     continue
                     
                 wrapped_lines = wrap_paragraph(paragraph, max_chars)
+                processed_paragraphs.extend(wrapped_lines)
                 
-                for line in wrapped_lines:
-                    if line.strip():
-                        draw_text_line(img, draw, line, 0, y, font_size, DEFAULT_TEXT_COLOR, 
-                                     self.get_emoji_font(font_size))
-                    y += body_font.size * FONT_CONFIG['LINE_SPACING_FACTOR']
+                if len(paragraphs) > 1:
+                    processed_paragraphs.append("")
+            
+            if processed_paragraphs and not processed_paragraphs[-1]:
+                processed_paragraphs.pop()
+            
+            # Calculate line spacing
+            line_spacing = font_size * FONT_CONFIG['LINE_SPACING_FACTOR']
+            
+            # Calculate total height of text block
+            text_block_height = len(processed_paragraphs) * line_spacing
+            
+            # Calculate starting y position to center the text block vertically
+            y = start_y + (available_height - text_block_height) / 2
+            
+            # Draw each line of text
+            for line in processed_paragraphs:
+                if not line.strip():
+                    y += line_spacing
+                    continue
                 
-                # Add extra spacing between paragraphs
-                y += body_font.size * (FONT_CONFIG['LINE_SPACING_FACTOR'] - 1)
+                logger.info(f"Drawing text line: '{line[:15]}{'...' if len(line) > 15 else ''}'")
+                draw_text_line(img, draw, line, 0, y, font_size, FONT_CONFIG['DEFAULT_TEXT_COLOR'])
+                y += line_spacing
         else:
             logger.info("No main text to process")
             

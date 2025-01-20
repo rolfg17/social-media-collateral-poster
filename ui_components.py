@@ -1,25 +1,43 @@
 import streamlit as st
 import logging
+from typing import Dict, Set, Any, Optional
 from pathlib import Path
+import uuid
+import subprocess
+from state_manager import AppState
+from image_processor import ImageProcessor
+from config_manager import Config
+from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
 
-class ImageGridUI:
+class BaseUI:
+    """Base class for UI components."""
+    
+    def __init__(self, state: AppState):
+        """Initialize UI component.
+        
+        Args:
+            state: Application state manager
+        """
+        self.state = state
+        # Initialize session state if needed
+        for key in state.VALID_KEYS:
+            if key not in st.session_state:
+                st.session_state[key] = getattr(state, key)
+
+class ImageGridUI(BaseUI):
     """Component for rendering the grid of images."""
     
-    def __init__(self, state, image_processor):
+    def __init__(self, state: AppState, image_processor: ImageProcessor):
         """Initialize the image grid UI component.
         
         Args:
-            state: AppState instance
-            image_processor: ImageProcessor instance
+            state: Application state manager
+            image_processor: Image processor instance
         """
-        self.state = state
+        super().__init__(state)
         self.image_processor = image_processor
-        
-        # Initialize checkbox keys in session state if not present
-        if 'checkbox_keys' not in st.session_state:
-            st.session_state.checkbox_keys = {}
     
     def render_image_pair(self, titles, cleaned_contents, image_config):
         """Render a pair of images in two columns.
@@ -73,20 +91,16 @@ class ImageGridUI:
                     st.error(f"Failed to create image for {title}")
                     return
             
-            # Initialize selection state if needed
-            if title not in self.state.selected_images:
-                logger.debug(f"Initializing selection state for {title}")
-                current_selected = dict(self.state.selected_images)
-                current_selected[title] = self.state.select_all
-                self.state.update(selected_images=current_selected)
-            
             # Create checkbox and image container
             check_col, img_col = st.columns([1, 10])
             
-            # Get or create unique key for this checkbox from session state
-            if title not in st.session_state.checkbox_keys:
-                st.session_state.checkbox_keys[title] = f"checkbox_{str(uuid.uuid4())}"
-            checkbox_key = st.session_state.checkbox_keys[title]
+            # Get or create unique key for this checkbox
+            if title not in self.state.checkbox_keys:
+                self.state.update(checkbox_keys={
+                    **self.state.checkbox_keys,
+                    title: f"checkbox_{str(uuid.uuid4())}"
+                })
+            checkbox_key = self.state.checkbox_keys[title]
             
             # Checkbox
             with check_col:
@@ -96,7 +110,7 @@ class ImageGridUI:
                     value=self.state.selected_images.get(title, False),
                     label_visibility="collapsed"
                 )
-                if selected != self.state.selected_images.get(title):
+                if selected != self.state.selected_images.get(title, False):
                     current_selected = dict(self.state.selected_images)
                     current_selected[title] = selected
                     self.state.update(selected_images=current_selected)
@@ -117,44 +131,47 @@ class ImageGridUI:
                     label_visibility="collapsed"
                 )
 
-class ConfigurationUI:
+class ConfigurationUI(BaseUI):
     """Handles configuration UI components."""
     
-    def __init__(self, state, config):
+    def __init__(self, state: AppState, config: Config):
         """Initialize configuration UI.
         
         Args:
             state: Application state manager
             config: Configuration manager instance
         """
-        self.state = state
+        super().__init__(state)
         self.config = config
-        if 'select_all' not in st.session_state:
-            st.session_state.select_all = False
     
     def render(self):
         """Render configuration UI components."""
         st.sidebar.title("Settings")
         with st.sidebar:
             # Select all checkbox
-            if st.checkbox("Select All Images", key="select_all_checkbox", value=st.session_state.select_all):
-                st.session_state.select_all = True
-                for key in st.session_state.selected_images:
-                    st.session_state.selected_images[key] = True
-            else:
-                st.session_state.select_all = False
+            if st.checkbox("Select All Images", key="select_all_checkbox", value=self.state.select_all):
+                if not self.state.select_all:  # Only update if changing to True
+                    self.state.update(
+                        select_all=True,
+                        selected_images={title: True for title in self.state.sections}
+                    )
+            elif self.state.select_all:  # Only update if changing to False
+                self.state.update(
+                    select_all=False,
+                    selected_images={title: False for title in self.state.sections}
+                )
 
-class HeaderSettingsUI:
+class HeaderSettingsUI(BaseUI):
     """Handles header settings UI components."""
     
-    def __init__(self, state, config):
+    def __init__(self, state: AppState, config: Config):
         """Initialize header settings UI.
         
         Args:
             state: Application state manager
             config: Configuration manager instance
         """
-        self.state = state
+        super().__init__(state)
         self.config = config
     
     def render(self):
@@ -198,134 +215,145 @@ class HeaderSettingsUI:
         # Store header override in session state
         st.session_state.header_override = header_override
 
-class ExportOptionsUI:
+class ExportOptionsUI(BaseUI):
     """Handles export options UI components."""
     
-    def __init__(self, state, app):
+    def __init__(self, state: AppState, app: 'App'):
         """Initialize export options UI.
         
         Args:
             state: Application state manager
             app: Main application instance for accessing export methods
         """
-        self.state = state
+        super().__init__(state)
         self.app = app
     
     def render(self):
         """Render export options UI components."""
-        st.sidebar.write("### Export Options")
+        st.sidebar.subheader("Export Options")
         
-        col1, col2 = st.sidebar.columns(2)
-        with col1:
-            # Save to Photos button
-            if st.button("Save to Photos", key="save_to_photos"):
-                logger.info("Save to Photos button clicked")
-                # Get selected image titles
-                selected_titles = [title for title, selected in st.session_state.selected_images.items() if selected]
-                logger.info(f"Selected titles: {selected_titles}")
-                
-                if selected_titles:
-                    logger.info(f"Saving {len(selected_titles)} images to Photos")
-                    results = self.app.save_to_photos(selected_titles)
-                    logger.info(f"Save to photos results: {results}")
-                    
-                    # Show results
-                    for result in results:
-                        if isinstance(result, subprocess.CompletedProcess):
-                            if result.returncode == 0:
-                                st.success(f"Successfully imported {result.args[-1]}")
-                            else:
-                                st.error(f"Error importing {result.args[-1]}: {result.stderr}")
-                else:
-                    st.warning("Please select at least one image to save")
+        selected_titles = [title for title, selected in self.state.selected_images.items() if selected]
         
-        with col2:
-            # Export to Drive button
-            drive_button_disabled = self.app.drive_manager is None
-            if drive_button_disabled:
-                st.button("Export to Drive", disabled=True, help="Google Drive integration not configured")
-            else:
-                if not st.session_state.drive_authenticated and st.button("Connect Drive"):
-                    with st.spinner("Connecting to Google Drive..."):
-                        if self.app.drive_manager.authenticate():
-                            st.session_state.drive_authenticated = True
-                            st.success("Connected to Google Drive!")
+        if selected_titles:
+            st.sidebar.write(f"Selected images: {len(selected_titles)}")
+            
+            # Create two columns for the buttons
+            col1, col2 = st.sidebar.columns(2)
+            
+            # Export to Photos
+            with col1:
+                if st.button("Save to Photos"):
+                    with st.spinner("Saving to Photos..."):
+                        results = self.app.photos_ui.save_to_photos(selected_titles)
+                        st.session_state.import_results = results
+                        st.rerun()
+            
+            # Export to Drive if available
+            if self.app.drive_ui:
+                with col2:
+                    if st.button("Export to Drive"):
+                        with st.spinner("Exporting to Drive..."):
+                            self.app.drive_ui.export_to_drive(selected_titles)
                             st.rerun()
-                        else:
-                            st.error("Failed to connect to Google Drive")
-                
-                elif st.session_state.drive_authenticated and st.button("Export to Drive"):
-                    selected_titles = [title for title, selected in st.session_state.selected_images.items() if selected]
-                    if not selected_titles:
-                        st.warning("Please select at least one image to export")
-                    else:
-                        with st.spinner("Exporting to Google Drive..."):
-                            self.app.export_to_drive(selected_titles)
+        else:
+            st.sidebar.write("No images selected")
 
-class FileUploaderUI:
+class FileUploaderUI(BaseUI):
     """UI component for file upload handling."""
     
-    def __init__(self, state, file_processor):
+    def __init__(self, state: AppState, file_processor: 'FileProcessor'):
         """Initialize the file uploader UI component.
         
         Args:
-            state: AppState instance
-            file_processor: FileProcessor instance for handling uploaded files
+            state: Application state manager
+            file_processor: File processor instance for handling uploaded files
         """
-        self.state = state
+        super().__init__(state)
         self.file_processor = file_processor
+    
+    def handle_file_upload(self, uploaded_file):
+        """Process uploaded file and generate collaterals.
         
+        Args:
+            uploaded_file: Streamlit UploadedFile object
+        """
+        if uploaded_file:
+            logger.info(f"Processing uploaded file: {uploaded_file.name}")
+            
+            try:
+                # Process the file
+                logger.debug("Calling file processor...")
+                result = self.file_processor.process_file(uploaded_file)
+                
+                if result and isinstance(result, dict):
+                    sections = result.get('sections', {})
+                    cleaned_contents = result.get('cleaned_contents', {})
+                    
+                    logger.debug(f"Received sections keys: {list(sections.keys())}")
+                    logger.debug(f"Received cleaned_contents keys: {list(cleaned_contents.keys())}")
+                    
+                    if not sections or not cleaned_contents:
+                        logger.error("Empty sections or cleaned contents")
+                        return False
+                        
+                    if set(sections.keys()) != set(cleaned_contents.keys()):
+                        logger.error("Mismatch between sections and cleaned contents")
+                        return False
+                    
+                    # Update state in one atomic operation
+                    logger.debug("Updating state...")
+                    success = self.state.update(
+                        sections=dict(sections),
+                        cleaned_contents=dict(cleaned_contents),
+                        images={},
+                        selected_images={}
+                    )
+                    
+                    if success:
+                        st.session_state.processed_file = uploaded_file
+                        logger.info(f"Successfully processed file with {len(sections)} sections")
+                        return True
+                    else:
+                        logger.error("State update failed")
+                        return False
+                else:
+                    logger.error("Invalid result from file processor")
+                    return False
+                    
+            except Exception as e:
+                logger.error(f"Error processing file: {str(e)}", exc_info=True)
+                return False
+        return False
+    
     def render(self):
         """Render the file uploader widget and handle file uploads."""
-        uploaded_file = st.file_uploader(
-            "Choose a markdown file", 
-            type=['md'], 
-            help="Upload either a newsletter file with a # Prompt section or a pre-generated collaterals file",
-            key="file_uploader"
+        st.sidebar.subheader("Upload File")
+        
+        uploaded_file = st.sidebar.file_uploader(
+            "Choose a file",
+            type=['txt', 'md'],
+            key='file_uploader',
+            label_visibility='collapsed'
         )
         
         if uploaded_file:
-            if 'processed_file' not in st.session_state or st.session_state.processed_file != uploaded_file:
-                st.session_state.processed_file = uploaded_file
-                logger.info(f"New file uploaded: {uploaded_file.name}")
-                try:
-                    content_preview = uploaded_file.read().decode('utf-8')[:200]
-                    uploaded_file.seek(0)  # Reset file pointer
-                    logger.info(f"Content preview: {content_preview}")
-                    
-                    # Process the file
-                    logger.info("Processing uploaded file...")
-                    content = self.file_processor.process_file(uploaded_file)
-                    
-                    if content:
-                        sections, cleaned_contents = content
-                        if sections:
-                            logger.info(f"Successfully processed {len(sections)} sections")
-                            # Store processed content
-                            st.session_state.processed_sections = sections
-                            st.session_state.cleaned_contents = cleaned_contents
-                            st.session_state.success_message = f"Successfully processed {len(sections)} sections"
-                        else:
-                            logger.error("No sections found in file")
-                            st.error("No sections found in file")
-                    else:
-                        logger.error("Failed to process file")
-                        st.error("Failed to process file")
-                except Exception as e:
-                    logger.error(f"Error processing file: {str(e)}", exc_info=True)
-                    st.error(f"Error processing file: {str(e)}")
+            if uploaded_file != st.session_state.get('processed_file'):
+                logger.info("New file uploaded, processing...")
+                success = self.handle_file_upload(uploaded_file)
+                if success:
+                    st.rerun()
 
-class MainContentUI:
+class MainContentUI(BaseUI):
     """Handles main content area UI components."""
     
-    def __init__(self, state, app):
+    def __init__(self, state: AppState, app: 'App'):
         """Initialize main content UI.
         
         Args:
             state: Application state manager
             app: Main application instance
         """
-        self.state = state
+        super().__init__(state)
         self.app = app
     
     def render(self):
@@ -364,38 +392,35 @@ class MainContentUI:
             body_font_size=40
         )
         
-        # Check if we need to reprocess content by comparing content hash
-        should_reprocess = False
-        if 'processed_file' in st.session_state:
-            logger.info(f"Current file detected: {st.session_state.processed_file.name}")
-            current_content = st.session_state.processed_file.read()
-            st.session_state.processed_file.seek(0)  # Reset file pointer after reading
-            content_hash = hash(current_content)
-            logger.debug(f"Content hash: {content_hash}")
-            
-            should_reprocess = (
-                'processed_sections' not in st.session_state or  # First time processing
-                'last_content_hash' not in st.session_state or  # No hash stored
-                st.session_state.last_content_hash != content_hash  # Content changed
-            )
-            logger.info(f"Should reprocess: {should_reprocess}")
+        # Check if we have sections and cleaned contents
+        logger.info("Checking session state for sections and cleaned_contents")
+        logger.info(f"Session state keys: {list(st.session_state.keys())}")
         
-        if 'processed_file' in st.session_state:
-            if should_reprocess:
-                logger.info("Processing new content")
-                # Process new content
-                content = self.app.handle_file_upload(st.session_state.processed_file)
-                if content:
-                    logger.info("Content processed successfully")
-                    # Parse and clean content
-                    sections, cleaned_contents = content
-                    if sections:
-                        logger.info(f"Found {len(sections)} sections")
-                        # Cache the processed content and content hash
-                        st.session_state.processed_sections = sections
-                        st.session_state.last_content_hash = content_hash
-                    else:
-                        st.error("""No valid sections found in the markdown file. Please ensure your file follows this structure:
+        if 'sections' in st.session_state and 'cleaned_contents' in st.session_state:
+            sections = st.session_state.sections
+            cleaned_contents = st.session_state.cleaned_contents
+            logger.info(f"Found sections: {list(sections.keys())}")
+            logger.info(f"Found cleaned_contents: {list(cleaned_contents.keys())}")
+            
+            if sections:
+                logger.info(f"Found {len(sections)} sections")
+                # Process sections in pairs
+                sections_items = [(title, content) for title, content in sections.items() if content.strip()]
+                logger.info(f"Processing {len(sections_items)} non-empty sections")
+                
+                for i in range(0, len(sections_items), 2):
+                    pair_titles = [sections_items[i][0]]
+                    if i + 1 < len(sections_items):
+                        pair_titles.append(sections_items[i + 1][0])
+                    logger.debug(f"Rendering image pair: {pair_titles}")
+                    try:
+                        self.app.image_grid.render_image_pair(pair_titles, cleaned_contents, image_config)
+                        logger.debug(f"Successfully rendered pair: {pair_titles}")
+                    except Exception as e:
+                        logger.error(f"Error rendering pair {pair_titles}: {str(e)}")
+                        st.error(f"Error rendering images: {str(e)}")
+            else:
+                st.error("""No valid sections found in the markdown file. Please ensure your file follows this structure:
 
 ```markdown
 # Collaterals
@@ -405,58 +430,178 @@ Content for section 1...
 ## Section Title 2
 Content for section 2...
 ```
-
-Note: 
-- Must start with '# Collaterals' header
-- Each section must start with '## ' (level 2 header)
-- Content must be placed under each section header
 """)
-                        return
+
+class PhotosUI(BaseUI):
+    """Handles Photos app integration UI components."""
+    
+    def __init__(self, state: AppState, app: 'App'):
+        """Initialize photos UI.
+        
+        Args:
+            state: Application state manager
+            app: Main application instance
+        """
+        super().__init__(state)
+        self.app = app
+    
+    def save_to_photos(self, titles: list) -> list:
+        """Save images to Photos app using AppleScript.
+        
+        Args:
+            titles: List of image titles to save
             
-            # Use cached content if available
-            if 'processed_sections' in st.session_state:
-                sections = st.session_state.processed_sections
-                cleaned_contents = st.session_state.cleaned_contents
+        Returns:
+            list: List of results for each save operation
+        """
+        logger.info(f"Saving {len(titles)} images to Photos")
+        results = []
+        
+        for title in titles:
+            if title not in self.state.images:
+                results.append(f"❌ Failed: Image not found for {title}")
+                continue
                 
-                # Status area for import results
-                if 'import_results' in st.session_state and st.session_state.import_results:
-                    with st.expander("Export Results", expanded=True):
-                        success_count = sum(1 for result in st.session_state.import_results if result.startswith('✅'))
-                        failure_count = len([r for r in st.session_state.import_results if r.startswith('❌')])
-                        st.write(f"✅ {success_count} successful exports, ❌ {failure_count} failed exports")
-                        
-                        # Display each result, with clickable links for Drive exports
-                        for result in st.session_state.import_results:
-                            if " - http" in result:  # It's a Drive result with a link
-                                text, link = result.rsplit(" - ", 1)
-                                st.markdown(f"{text} - [View in Drive]({link})")
-                            else:
-                                st.write(result)
-                        
-                        # Add status message about text clippings
-                        clippings_path = Path(self.app.config['obsidian_vault_path']) / "text_clippings.json"
-                        if clippings_path.exists():
-                            st.write("✅ Text clippings saved successfully")
-                        else:
-                            st.markdown("❌ Text clippings file not found")
-                        
-                        if st.button("Clear Results"):
-                            st.session_state.import_results = []
-                            st.rerun()
-                
-                # Main content area - render images
-                if 'processed_sections' in st.session_state and 'cleaned_contents' in st.session_state:
-                    sections_items = [(title, content) for title, content in st.session_state.processed_sections.items() if content.strip()]
-                    logger.info(f"Processing {len(sections_items)} sections")
+            try:
+                # Save image to temporary file for Photos import
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                    self.state.images[title].save(tmp.name, format='PNG')
                     
-                    for i in range(0, len(sections_items), 2):
-                        pair_titles = [sections_items[i][0]]
-                        if i + 1 < len(sections_items):
-                            pair_titles.append(sections_items[i + 1][0])
-                        logger.debug(f"Rendering image pair: {pair_titles}")
-                        try:
-                            self.app.image_grid.render_image_pair(pair_titles, st.session_state.cleaned_contents, image_config)
-                            logger.debug(f"Successfully rendered pair: {pair_titles}")
-                        except Exception as e:
-                            logger.error(f"Error rendering pair {pair_titles}: {str(e)}")
-                            st.error(f"Error rendering images: {str(e)}")
+                    # Create AppleScript command
+                    script = f'''
+                    tell application "Photos"
+                        activate
+                        delay 1
+                        import POSIX file "{tmp.name}"
+                    end tell
+                    '''
+                    
+                    # Run AppleScript
+                    result = subprocess.run(['osascript', '-e', script], 
+                                         capture_output=True, 
+                                         text=True)
+                    
+                    if result.returncode == 0:
+                        # Get source filename from either file_uploader or processed_file
+                        source_file = (st.session_state.get('file_uploader', None) or 
+                                     st.session_state.get('processed_file', None))
+                        if source_file:
+                            logger.info(f"Adding text clipping for {title}")
+                            success = self.app.text_collector.add_clipping(
+                                source_file=source_file.name,
+                                image_file=os.path.basename(tmp.name),
+                                text=self.state.cleaned_contents[title],
+                                headline=title,
+                                timestamp=None  # Will use current time
+                            )
+                            if success:
+                                results.append(f"✅ Success: Saved image and text for {title}")
+                            else:
+                                results.append(f"⚠️ Warning: Saved image but failed to save text for {title}")
+                    else:
+                        logger.error(f"Error importing {title}: {result.stderr}")
+                        results.append(f"❌ Failed: {result.stderr} - {title}")
+                    
+                    # Clean up temporary file
+                    os.unlink(tmp.name)
+                    
+            except Exception as e:
+                logger.error(f"Exception in save_to_photos: {str(e)}")
+                results.append(f"❌ Failed: {str(e)} - {title}")
+        
+        # Store results in session state
+        st.session_state.import_results = results
+        
+        return results
+
+class DriveUI(BaseUI):
+    """Handles Google Drive integration UI components."""
+    
+    def __init__(self, state: AppState, app: 'App'):
+        """Initialize drive UI.
+        
+        Args:
+            state: Application state manager
+            app: Main application instance
+        """
+        super().__init__(state)
+        self.app = app
+    
+    def render(self):
+        """Render drive UI components."""
+        st.sidebar.subheader("Google Drive")
+        
+        if not self.state.drive_authenticated:
+            if st.sidebar.button("Connect Drive"):
+                with st.spinner("Connecting to Google Drive..."):
+                    if self.app.drive_manager.authenticate():
+                        self.state.update(drive_authenticated=True)
+                        st.success("Connected to Google Drive!")
+                        st.rerun()
+                    else:
+                        st.error("Failed to connect to Google Drive")
+    
+    def export_to_drive(self, titles):
+        """Export selected images to Google Drive.
+        
+        Args:
+            titles: List of image titles to export
+            
+        Returns:
+            bool: True if all exports were successful
+        """
+        success = True
+        results = []
+        
+        for title in titles:
+            try:
+                if title in self.state.exported_files:
+                    results.append(f"⚠️ Already exported: {title}")
+                    continue
+                
+                # Create temporary file
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                    # Generate and save image
+                    image = self.app.image_processor.create_text_image(
+                        text=self.state.cleaned_contents[title],
+                        config=self.app.config.to_dict()
+                    )
+                    image.save(tmp.name)
+                    
+                    # Upload to Drive
+                    result = self.app.drive_manager.upload_file(tmp.name)
+                    if result:
+                        self.state.update(exported_files=self.state.exported_files | {title})  # Store title instead of path
+                        results.append(f"✅ Uploaded to Drive: {title} - {result.get('webViewLink')}")
+                        
+                        # Save text clipping after successful upload
+                        source_file = (st.session_state.get('file_uploader', None) or 
+                                     st.session_state.get('processed_file', None))
+                        logger.info(f"Found source file: {source_file.name if source_file else 'None'}")
+                        if source_file:
+                            logger.info(f"Attempting to save clipping for {title} from {source_file.name}")
+                            logger.info(f"Text content length: {len(self.state.cleaned_contents[title])}")
+                            self.app.text_collector.add_clipping(
+                                source_file=source_file.name,
+                                image_file=os.path.basename(tmp.name),
+                                text=self.state.cleaned_contents[title],
+                                headline=title,
+                                timestamp=None  # Will use current time
+                            )
+                            logger.info("Finished add_clipping call")
+                    else:
+                        results.append(f"❌ Failed to upload: {title}")
+                        success = False
+                    
+                    # Clean up temporary file
+                    os.unlink(tmp.name)
+                    
+            except Exception as e:
+                logger.error(f"Error in export_to_drive: {str(e)}")
+                results.append(f"❌ Failed: {str(e)} - {title}")
+                success = False
+        
+        # Store results in session state
+        st.session_state.import_results = results
+        
+        return success

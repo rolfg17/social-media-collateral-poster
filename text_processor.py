@@ -134,20 +134,29 @@ class TextProcessor:
     def clean_text_for_image(self, text: str) -> str:
         """Clean and format text for image rendering."""
         try:
+            if not text or not text.strip():
+                return ""
+                
             # Remove URLs first
             text = self.clean_urls(text)
-            
+            if not text.strip():
+                return ""
+                
             # Clean markdown formatting
             text = self.clean_markdown(text)
-            
-            # Process hashtags
-            text, _ = self.process_hashtags(text)
-            
-            # Normalize spacing
+            if not text.strip():
+                return ""
+                
+            # Normalize spacing (don't process hashtags)
             text = self.normalize_spacing(text)
-            
+            if not text.strip():
+                return ""
+                
+            logger.debug(f"Cleaned text: {text[:100]}...")
             return text
+            
         except Exception as e:
+            logger.error(f"Failed to clean text: {str(e)}", exc_info=True)
             raise TextError("Failed to clean text for image", str(e))
 
     def parse_markdown_content(self, content: str, config: Dict[str, Any] = None) -> Dict[str, str]:
@@ -173,29 +182,31 @@ class TextProcessor:
         # Define the header that marks the start of the Collaterals section
         collaterals_header = config.get('collaterals_header', '# Collaterals') if config else '# Collaterals'
 
-        # Split the content into lines
-        lines = content.split('\n')
+        # Split the content into lines and clean up empty lines
+        lines = [line.rstrip() for line in content.split('\n')]
 
         # Iterate over the lines
         for line in lines:
-            if line.strip() == collaterals_header:
+            stripped_line = line.strip()
+            if stripped_line == collaterals_header:
                 # We've reached the Collaterals section
                 in_collaterals = True
                 continue
-            elif line.startswith("# Feel free") or line.startswith("# Note"):
+            elif stripped_line.startswith("# Feel free") or stripped_line.startswith("# Note"):
                 # Skip common ending notes
                 continue
-            elif in_collaterals:
+            elif in_collaterals and stripped_line:  # Only process non-empty lines
                 # Check for any level of header (# through ###)
-                if re.match(r'^#{1,3}\s', line):
-                    # We've reached a new section
-                    if current_section:
-                        # Add the current section to the dictionary
-                        sections[current_section] = '\n'.join(current_content).strip()
+                if re.match(r'^#{1,3}\s', stripped_line):
+                    # Save the current section before starting a new one
+                    if current_section and current_content:
+                        content_text = '\n'.join(current_content).strip()
+                        if content_text:  # Only save if there's actual content
+                            sections[current_section] = content_text
                         current_content = []
                     
                     # Get the base section name without number and hashes
-                    base_section = line.lstrip("#").strip()
+                    base_section = stripped_line.lstrip("#").strip()
                     
                     # Update counter for this section title
                     if base_section in header_counts:
@@ -207,12 +218,20 @@ class TextProcessor:
                     
                     logger.debug(f"Processing section: {current_section}")
                 else:
-                    if current_section:
-                        current_content.append(line)
+                    if current_section and stripped_line:  # Only add non-empty lines
+                        current_content.append(stripped_line)
 
-        # Add the last section
+        # Add the last section if it has content
         if current_section and current_content:
-            sections[current_section] = '\n'.join(current_content).strip()
+            content_text = '\n'.join(current_content).strip()
+            if content_text:  # Only save if there's actual content
+                sections[current_section] = content_text
+
+        # Log the found sections
+        if sections:
+            logger.debug(f"Found sections: {list(sections.keys())}")
+        else:
+            logger.error("No valid sections found in the markdown file")
 
         return sections
 
