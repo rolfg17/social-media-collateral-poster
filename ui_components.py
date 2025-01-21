@@ -47,8 +47,8 @@ class ImageGridUI(BaseUI):
         """Render image grid UI components."""
         st.header("Generated Images")
         
-        # Get images from session state
-        grid_images = st.session_state.get('grid_images', {})
+        # Get images from state
+        grid_images = self.grid_state.get_images()
         logger.info(f"Rendering grid with images: {list(grid_images.keys())}")
         
         if not grid_images:
@@ -82,82 +82,204 @@ class ImageGridUI(BaseUI):
             else:
                 logger.warning(f"Skipping invalid image for title: {title}")
 
-class ConfigurationUI(BaseUI):
-    """Handles configuration UI components."""
-    
-    def __init__(self, state: AppState, config: Config):
-        """Initialize configuration UI.
-        
-        Args:
-            state: Application state manager
-            config: Configuration manager instance
-        """
-        super().__init__(state)
-        self.config = config
-        self.ui_state = UIState(state)
-        self.config_state = ConfigurationState(self.ui_state, state)
-        
-    def render(self):
-        """Render configuration UI components."""
-        st.sidebar.subheader("Configuration")
-        
-        # Select all checkbox
-        select_all = st.sidebar.checkbox(
-            "Select All Images",
-            value=self.config_state.get_select_all()
-        )
-        if select_all != self.config_state.get_select_all():
-            self.config_state.set_select_all(select_all)
-            
-        # Show header/footer checkbox
-        show_header_footer = st.sidebar.checkbox(
-            "Show Header/Footer",
-            value=self.config_state.get_show_header_footer()
-        )
-        if show_header_footer != self.config_state.get_show_header_footer():
-            self.config_state.set_show_header_footer(show_header_footer)
-
 class HeaderSettingsUI(BaseUI):
     """Handles header settings UI components."""
     
-    def __init__(self, state: AppState, config: Config):
+    def __init__(self, state: AppState, config: Config, app: 'App'):
         """Initialize header settings UI.
         
         Args:
             state: Application state manager
             config: Configuration manager instance
+            app: Main application instance
         """
         super().__init__(state)
         self.config = config
+        self.app = app
         self.ui_state = UIState(state)
         self.header_state = HeaderSettingsState(self.ui_state, state)
+        self.config_state = ConfigurationState(self.ui_state, state)
+        self.grid_state = ImageGridState(self.ui_state, state)
+        self.main_content_state = MainContentState(self.ui_state, state)
+        logger.info("HeaderSettingsUI initialized with states")
         
     def render(self):
         """Render header settings UI components."""
+        logger.debug("Starting HeaderSettingsUI.render()")
         st.sidebar.subheader("Header Settings")
+        
+        # Track previous state before UI interaction
+        prev_header_override = self.config_state.get_header_override()
+        logger.info(f"[UI] Previous state - header_override: '{prev_header_override}'")
         
         # Header override input
         header_override = st.sidebar.text_area(
             "Header Override",
-            value=self.header_state.get_header_override()
+            value=prev_header_override or "",
+            key="header_override_input"
         )
-        if header_override != self.header_state.get_header_override():
-            self.header_state.set_header_override(header_override)
+        
+        # Only update if value actually changed
+        if header_override != prev_header_override:
+            logger.info(f"[UI] Header override changed: '{prev_header_override}' -> '{header_override}'")
+            self.config_state.set_header_override(header_override)
+            logger.info("[UI] Starting image regeneration due to header override change")
+            self._regenerate_images()
             
-        # Font path inputs
-        header_font = st.sidebar.text_input(
-            "Header Font Path",
-            value=self.header_state.get_header_font_path()
-        )
-        if header_font != self.header_state.get_header_font_path():
-            self.header_state.set_header_font_path(header_font)
+    def _regenerate_images(self):
+        """Regenerate all images with current settings."""
+        logger.info("=== Starting image regeneration flow ===")
+        
+        # Get current state
+        show_header = self.config_state.get_show_header_footer()
+        header_override = self.config_state.get_header_override()
+        logger.info(f"Current settings - show_header: {show_header}, header_override: '{header_override}'")
+        
+        # Use MainContentState to access cleaned_contents
+        cleaned_contents = self.main_content_state.get_cleaned_contents()
+        logger.info(f"Found {len(cleaned_contents)} items to regenerate")
+        
+        if not cleaned_contents:
+            logger.warning("No content available for regeneration")
+            return
             
-        body_font = st.sidebar.text_input(
-            "Body Font Path",
-            value=self.header_state.get_body_font_path()
+        # Track regeneration progress
+        grid_images = {}
+        success_count = 0
+        fail_count = 0
+        
+        for title, text in cleaned_contents.items():
+            logger.debug(f"Processing item: {title}")
+            
+            # Create image with current settings
+            image = self.app.image_processor.create_text_image(
+                text,
+                config={'header_override': header_override},
+                show_header_footer=show_header
+            )
+            
+            if image is not None:
+                grid_images[title] = image
+                success_count += 1
+                logger.debug(f"Successfully generated image for: {title}")
+            else:
+                fail_count += 1
+                logger.error(f"Failed to generate image for: {title}")
+                
+        # Update grid images through state manager
+        logger.info(f"Regeneration complete - Success: {success_count}, Failed: {fail_count}")
+        logger.info("Updating grid state with new images")
+        self.grid_state.set_images(grid_images)
+        logger.info("=== Image regeneration flow complete ===")
+
+class ConfigurationUI(BaseUI):
+    """Handles configuration UI components."""
+    
+    def __init__(self, state: AppState, config: Config, app: 'App'):
+        """Initialize configuration UI.
+        
+        Args:
+            state: Application state manager
+            config: Configuration manager instance
+            app: Main application instance
+        """
+        super().__init__(state)
+        self.config = config
+        self.app = app
+        self.ui_state = UIState(state)
+        self.config_state = ConfigurationState(self.ui_state, state)
+        self.header_state = HeaderSettingsState(self.ui_state, state)
+        self.grid_state = ImageGridState(self.ui_state, state)
+        self.main_content_state = MainContentState(self.ui_state, state)
+        logger.info("ConfigurationUI initialized with states")
+        
+    def render(self):
+        """Render configuration UI components."""
+        logger.debug("Starting ConfigurationUI.render()")
+        st.sidebar.subheader("Configuration")
+        
+        # Track previous state
+        prev_show_header = self.config_state.get_show_header_footer()
+        prev_select_all = self.config_state.get_select_all()
+        logger.debug(f"Previous state - show_header: {prev_show_header}, select_all: {prev_select_all}")
+        
+        # Show header/footer checkbox
+        show_header = st.sidebar.checkbox(
+            "Show Header/Footer",
+            value=prev_show_header,
+            key="config_show_header_footer"  # Changed key to be unique
         )
-        if body_font != self.header_state.get_body_font_path():
-            self.header_state.set_body_font_path(body_font)
+        
+        # Only update if changed
+        if show_header != prev_show_header:
+            logger.info(f"[UI] Show header/footer changed: {prev_show_header} -> {show_header}")
+            self.config_state.set_show_header_footer(show_header)
+            # Force a state sync and regenerate images
+            self.state.update(show_header_footer=show_header)  # Update both internal and session state
+            logger.info("Starting image regeneration due to header/footer toggle")
+            self._regenerate_images()
+            
+        # Select all checkbox
+        select_all = st.sidebar.checkbox(
+            "Select All",
+            value=prev_select_all,
+            key="config_select_all"  # Changed key to be unique
+        )
+        
+        # Only update if changed
+        if select_all != prev_select_all:
+            logger.info(f"[UI] Select all changed: {prev_select_all} -> {select_all}")
+            self.config_state.set_select_all(select_all)
+            # Force a state sync
+            self.state.update(select_all=select_all)  # Update both internal and session state
+            
+    def _regenerate_images(self):
+        """Regenerate all images with current settings."""
+        logger.info("=== Starting image regeneration flow ===")
+        
+        # Get current state
+        show_header = self.config_state.get_show_header_footer()
+        header_override = self.header_state.get_header_override()  # Use header_state instead of config_state
+        logger.info(f"Current settings - show_header: {show_header}, header_override: '{header_override}'")
+        
+        # Use MainContentState to access cleaned_contents
+        cleaned_contents = self.main_content_state.get_cleaned_contents()
+        logger.info(f"Found {len(cleaned_contents)} items to regenerate")
+        
+        if not cleaned_contents:
+            logger.warning("No content available for regeneration")
+            return
+            
+        # Track regeneration progress
+        grid_images = {}
+        success_count = 0
+        fail_count = 0
+        
+        for title, text in cleaned_contents.items():
+            logger.debug(f"Processing item: {title}")
+            
+            # Create image with current settings
+            image = self.app.image_processor.create_text_image(
+                text,
+                config={'header_override': header_override},
+                show_header_footer=show_header
+            )
+            
+            if image is not None:
+                grid_images[title] = image
+                success_count += 1
+                logger.debug(f"Successfully generated image for: {title}")
+            else:
+                fail_count += 1
+                logger.error(f"Failed to generate image for: {title}")
+                
+        # Update grid images through state manager
+        logger.info(f"Regeneration complete - Success: {success_count}, Failed: {fail_count}")
+        logger.info("Updating grid state with new images")
+        self.grid_state.set_images(grid_images)
+        # Force a state sync after updating images
+        self.state.sync_with_session()
+        logger.info("=== Image regeneration flow complete ===")
 
 class ExportOptionsUI(BaseUI):
     """Handles export options UI components."""
@@ -208,6 +330,9 @@ class FileUploaderUI(BaseUI):
         self.app = app
         self.ui_state = UIState(state)
         self.uploader_state = FileUploaderState(self.ui_state, state)
+        self.header_state = HeaderSettingsState(self.ui_state, state)
+        self.config_state = ConfigurationState(self.ui_state, state)
+        self.grid_state = ImageGridState(self.ui_state, state)
         
     def render(self):
         """Render file uploader UI components."""
@@ -231,17 +356,14 @@ class FileUploaderUI(BaseUI):
         if error:
             st.error(error)
         
-        # Handle file upload when files are present and haven't been processed
-        if uploaded_files and 'last_processed_files' in st.session_state:
-            last_processed = st.session_state.get('last_processed_files', set())
+        # Handle file upload when files are present
+        if uploaded_files:
+            last_processed = self.uploader_state.get_uploaded_files()
             current_files = {f.name for f in uploaded_files}
             
-            if current_files != last_processed:
+            if current_files != set(last_processed):
                 self._handle_file_upload(uploaded_files)
-                st.session_state.last_processed_files = current_files
-        elif uploaded_files:
-            self._handle_file_upload(uploaded_files)
-            st.session_state.last_processed_files = {f.name for f in uploaded_files}
+                self.uploader_state.set_uploaded_files(list(current_files))
             
     def _handle_file_upload(self, uploaded_files):
         """Handle file upload process.
@@ -264,26 +386,34 @@ class FileUploaderUI(BaseUI):
                 if processed_file:
                     logger.info(f"Cleaned contents: {list(processed_file['cleaned_contents'].keys())}")
                     
-                    # Get existing images
-                    grid_images = st.session_state.get('grid_images', {}).copy()
+                    # Update cleaned contents in state
+                    self.state.set('cleaned_contents', processed_file['cleaned_contents'])
+                    
+                    # Get existing images through state manager
+                    grid_images = self.grid_state.get_images()
                     logger.info(f"Existing images: {list(grid_images.keys())}")
                     
                     # Add new images
                     for title, text in processed_file['cleaned_contents'].items():
                         logger.info(f"Creating image for: {title}")
-                        # Create image
+                        # Get settings through state interfaces
+                        header_override = self.header_state.get_header_override()
+                        show_header = self.config_state.get_show_header_footer()
+                        
+                        # Create image with current settings
                         image = self.app.image_processor.create_text_image(
                             text,
-                            show_header_footer=self.state.get('show_header_footer', True)
+                            config={'header_override': header_override},
+                            show_header_footer=show_header
                         )
                         logger.info(f"Image created: {image is not None}")
                         if image is not None:
                             grid_images[title] = image
                             logger.info(f"Added image to grid: {title}")
                     
-                    # Update session state
-                    st.session_state['grid_images'] = grid_images
-                    logger.info(f"Updated session state with images: {list(grid_images.keys())}")
+                    # Update grid images through state manager
+                    self.grid_state.set_images(grid_images)
+                    logger.info(f"Updated grid images: {list(grid_images.keys())}")
                 
                 # Add to uploaded files
                 uploaded = self.uploader_state.get_uploaded_files()

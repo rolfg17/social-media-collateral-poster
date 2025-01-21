@@ -16,6 +16,15 @@ import tempfile
 import urllib.parse
 import io
 
+# Configure root logger
+logging.basicConfig(
+    level=logging.ERROR,
+    format='%(levelname)s: %(message)s'
+)
+
+# Disable Streamlit's logger except for errors
+logging.getLogger('streamlit').setLevel(logging.ERROR)
+
 # Set page config before any other Streamlit commands
 st.set_page_config(page_title="Social Media Collateral Generator", layout="wide")
 
@@ -56,14 +65,17 @@ class CollateralApp:
         self.state = AppState()
         self.config = ConfigManager().load_config()
         
+        # Initialize session state first
+        self.initialize_session_state()
+        
         # Initialize processors
         self.text_processor = TextProcessor()
         self.file_processor = FileProcessor(self.text_processor)
         self.image_processor = ImageProcessor(self.config.to_dict())
         
         # Initialize UI components that don't need app reference
-        self.config_ui = ConfigurationUI(self.state, self.config)
-        self.header_ui = HeaderSettingsUI(self.state, self.config)
+        self.config_ui = ConfigurationUI(self.state, self.config, self)
+        self.header_ui = HeaderSettingsUI(self.state, self.config, self)
         self.file_uploader = FileUploaderUI(self.state, self.file_processor, self)
         
         # Initialize UI components that need app reference
@@ -72,7 +84,6 @@ class CollateralApp:
         self.photos_ui = PhotosUI(self.state, self)
         self.export_ui = ExportOptionsUI(self.state, self)
         
-        self.initialize_session_state()
         try:
             self.drive_manager = DriveManager()
             self.drive_ui = DriveUI(self.state, self)

@@ -107,6 +107,7 @@ class UIState(StateCategory):
         Args:
             text: The header override text
         """
+        logger.info(f"[HeaderState] Setting header override to: '{text}'")
         self.state.update(header_override=text)
         
     def get_processed_file(self) -> Optional[Any]:
@@ -203,19 +204,22 @@ class AppState:
         Returns:
             Any: Attribute value or default
         """
+        # First check session state
+        if key in st.session_state:
+            return st.session_state[key]
+        # Then check our state
         return getattr(self, key, default)
         
-    def set(self, key: str, value: Any) -> None:
+    def set(self, key: str, value: Any):
         """Set state attribute value.
         
         Args:
             key: Attribute name
             value: Value to set
         """
-        if key in self.VALID_KEYS:
-            setattr(self, key, value)
-        else:
-            logger.warning(f"Skipping unknown state key: {key}")
+        # Update both our state and session state
+        setattr(self, key, value)
+        st.session_state[key] = value
                 
     def update(self, **kwargs) -> bool:
         """Update state attributes.
@@ -225,6 +229,15 @@ class AppState:
             
         Returns:
             bool: True if update was successful
+            
+        Note:
+            CRITICAL: This method MUST update both the internal state AND st.session_state
+            to maintain consistency. Streamlit widgets read their values from session_state,
+            so failing to update it will cause widgets to get out of sync.
+            
+            Example: The show_header_footer checkbox reads its value from session_state,
+            so if we don't update session_state here, the checkbox will revert to its
+            previous value even though our internal state changed.
         """
         try:
             # Validate keys
@@ -239,8 +252,11 @@ class AppState:
                     current = dict(getattr(self, key))
                     current.update(value)
                     setattr(self, key, current)
+                    st.session_state[key] = current
                 else:
                     setattr(self, key, value)
+                    st.session_state[key] = value
+                logger.debug(f"Updated state - {key}: {value}")
                 
             return True
             
@@ -339,21 +355,34 @@ class AppState:
         Note: In production, this syncs with st.session_state.
         In test mode, it maintains the current state.
         """
-        try:
-            # In production mode, sync with Streamlit session state
-            for key, value in self._registry.__dict__.items():
-                if key not in st.session_state:
-                    logger.debug(f"Initializing session state for {key}")
-                    self.update(**{key: value})
-                else:
-                    logger.debug(f"Loading {key} from session state")
-                    self.update(**{key: st.session_state[key]})
-        except Exception as e:
-            # In test mode or if Streamlit is not available
-            logger.debug(f"Running in test mode or Streamlit not available: {str(e)}")
-            # Keep current state
-            pass
-                
+        # First sync from session state to our state
+        for key in self.VALID_KEYS:
+            if key in st.session_state:
+                setattr(self, key, st.session_state[key])
+            elif hasattr(self, key):
+                # If key exists in our state but not in session state, sync it to session state
+                st.session_state[key] = getattr(self, key)
+            else:
+                # Initialize both our state and session state
+                setattr(self, key, None)
+                st.session_state[key] = None
+
+        # Ensure critical state values are initialized
+        if 'cleaned_contents' not in st.session_state:
+            st.session_state['cleaned_contents'] = {}
+        if 'grid_images' not in st.session_state:
+            st.session_state['grid_images'] = {}
+        if 'show_header_footer' not in st.session_state:
+            st.session_state['show_header_footer'] = True
+        if 'header_override' not in st.session_state:
+            st.session_state['header_override'] = ""
+
+        # Sync our state with session state for these critical values
+        self.cleaned_contents = st.session_state['cleaned_contents']
+        self.grid_images = st.session_state['grid_images']
+        self.show_header_footer = st.session_state['show_header_footer']
+        self.header_override = st.session_state['header_override']
+
 class ImageGridState(StateCategory):
     """Manages state for image grid UI."""
     
@@ -416,26 +445,30 @@ class ImageGridState(StateCategory):
         self.state.selected_images = {}
         self.app.sync_with_session()
 
-class HeaderSettingsState:
+class HeaderSettingsState(StateCategory):
     """State interface for HeaderSettings component."""
     
-    def __init__(self, ui_state: UIState, app_state: AppState):
+    def __init__(self, ui_state: 'UIState', app_state: AppState):
         """Initialize HeaderSettings state interface.
         
         Args:
             ui_state: UI state manager
             app_state: Application state manager
         """
-        self.ui = ui_state
-        self.app = app_state
+        super().__init__(app_state)
+        self.ui_state = ui_state
+        self.app = self.state
+        logger.debug("HeaderSettingsState initialized")
         
     def get_header_override(self) -> str:
-        """Get header override text.
+        """Get current header override text.
         
         Returns:
             str: Current header override text
         """
-        return self.ui.get_header_override()
+        current = self.app.get('header_override', '')
+        logger.info(f"[HeaderState] Getting header override: '{current}'")
+        return current
         
     def set_header_override(self, text: str) -> None:
         """Set header override text.
@@ -443,7 +476,8 @@ class HeaderSettingsState:
         Args:
             text: New header override text
         """
-        self.ui.set_header_override(text)
+        logger.info(f"[HeaderState] Setting header override to: '{text}'")
+        self.app.update(header_override=text)
         
     def get_header_font_path(self) -> str:
         """Get header font path.
@@ -451,7 +485,7 @@ class HeaderSettingsState:
         Returns:
             str: Current header font path
         """
-        return self.ui.get_font_path("header")
+        return self.ui_state.get_font_path("header")
         
     def set_header_font_path(self, path: str) -> None:
         """Set header font path.
@@ -459,7 +493,7 @@ class HeaderSettingsState:
         Args:
             path: New header font path
         """
-        self.ui.set_font_path("header", path)
+        self.ui_state.set_font_path("header", path)
         
     def get_body_font_path(self) -> str:
         """Get body font path.
@@ -467,7 +501,7 @@ class HeaderSettingsState:
         Returns:
             str: Current body font path
         """
-        return self.ui.get_font_path("body")
+        return self.ui_state.get_font_path("body")
         
     def set_body_font_path(self, path: str) -> None:
         """Set body font path.
@@ -475,7 +509,7 @@ class HeaderSettingsState:
         Args:
             path: New body font path
         """
-        self.ui.set_font_path("body", path)
+        self.ui_state.set_font_path("body", path)
 
 class MainContentState(StateCategory):
     """Manages state for main content UI."""
@@ -507,19 +541,19 @@ class MainContentState(StateCategory):
         """
         self.app.update(sections=sections)
 
-    def get_cleaned_contents(self):
+    def get_cleaned_contents(self) -> Dict[str, str]:
         """Get cleaned content.
         
         Returns:
-            str: Cleaned content
+            Dict[str, str]: Dictionary mapping titles to cleaned content
         """
-        return self.app.get("cleaned_contents", "")
-
+        return self.app.get("cleaned_contents", {})
+    
     def set_cleaned_contents(self, contents):
         """Set cleaned content.
         
         Args:
-            contents: Cleaned content string
+            contents: Dictionary mapping titles to cleaned content
         """
         self.app.update(cleaned_contents=contents)
 
@@ -560,6 +594,7 @@ class ConfigurationState(StateCategory):
         super().__init__(app_state)
         self.ui_state = ui_state
         self.app = self.state
+        logger.debug("ConfigurationState initialized")
         
     def get_select_all(self) -> bool:
         """Get select all checkbox state.
@@ -567,14 +602,15 @@ class ConfigurationState(StateCategory):
         Returns:
             bool: True if select all is checked
         """
-        return self.app.get("select_all", False)
+        return self.app.get('select_all', False)
         
-    def set_select_all(self, value: bool):
+    def set_select_all(self, value: bool) -> None:
         """Set select all checkbox state.
         
         Args:
             value: New checkbox state
         """
+        logger.debug(f"Setting select_all to: {value}")
         self.app.update(select_all=value)
         
     def get_show_header_footer(self) -> bool:
@@ -583,15 +619,44 @@ class ConfigurationState(StateCategory):
         Returns:
             bool: True if show header/footer is checked
         """
-        return self.app.get("show_header_footer", True)
+        # Default to True if not in session state
+        if 'show_header_footer' not in st.session_state:
+            st.session_state.show_header_footer = True
+            self.app.show_header_footer = True
+            
+        current = self.app.get('show_header_footer', True)
+        logger.debug(f"Current show_header_footer state: {current}")
+        return current
         
-    def set_show_header_footer(self, value: bool):
+    def set_show_header_footer(self, value: bool) -> None:
         """Set show header/footer checkbox state.
         
         Args:
             value: New checkbox state
         """
+        logger.debug(f"Setting show_header_footer to: {value}")
+        # Update both internal state and session state
         self.app.update(show_header_footer=value)
+        st.session_state.show_header_footer = value
+        
+    def get_header_override(self) -> str:
+        """Get header override text.
+        
+        Returns:
+            str: Current header override text
+        """
+        current = self.app.get('header_override', '')
+        logger.info(f"[ConfigState] Getting header override: '{current}'")
+        return current
+        
+    def set_header_override(self, text: str) -> None:
+        """Set header override text.
+        
+        Args:
+            text: New header override text
+        """
+        logger.info(f"[ConfigState] Setting header override to: '{text}'")
+        self.app.update(header_override=text)
 
 class FileUploaderState(StateCategory):
     """Manages state for file uploader UI."""

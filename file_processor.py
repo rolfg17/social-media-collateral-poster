@@ -3,6 +3,8 @@
 import logging
 from typing import Dict, Optional
 
+# Configure logging
+logging.basicConfig(level=logging.ERROR)
 logger = logging.getLogger(__name__)
 
 class FileProcessor:

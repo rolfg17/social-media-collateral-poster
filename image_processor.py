@@ -21,7 +21,7 @@ EMOJI_FONT_PATH = "/System/Library/Fonts/Apple Color Emoji.ttc"
 FONT_PATH = "/System/Library/Fonts/Helvetica.ttc"
 
 # Set up logging
-logging.basicConfig(level=logging.WARNING)  # Change to WARNING to suppress detailed logs
+logging.basicConfig(level=logging.ERROR)  # Change to ERROR to suppress detailed logs
 logger = logging.getLogger(__name__)
 
 # Constants for font configuration
@@ -182,7 +182,6 @@ def process_text_line(text: str, font_size: int, max_width: int, text_color: str
         font_size = max(FONT_CONFIG['MIN_FONT_SIZE'], int(font_size))
         regular_font = load_font(st.session_state.body_font_path, font_size)
         emoji_font = load_emoji_font(font_size)
-        logger.info(f"Process text line - loaded body font: {st.session_state.body_font_path}")
     except OSError as e:
         logger.error(f"Failed to load fonts: {e}")
         return img
@@ -395,64 +394,51 @@ class ImageProcessor:
             st.session_state.body_font_path = body_path or "/System/Library/Fonts/Helvetica.ttc"
             
             # Load fonts with fallback
-            self.load_fonts(
-                header_path=st.session_state.header_font_path,
-                body_path=st.session_state.body_font_path,
-                header_font_size=40,
-                body_font_size=40
-            )
+            self._load_fonts()
         except Exception as e:
             logger.error(f"Failed to initialize fonts: {e}")
             # Use system fallback font
             st.session_state.header_font_path = "/System/Library/Fonts/Helvetica.ttc"
             st.session_state.body_font_path = "/System/Library/Fonts/Helvetica.ttc"
-            self.load_fonts(
-                header_path=st.session_state.header_font_path,
-                body_path=st.session_state.body_font_path,
-                header_font_size=40,
-                body_font_size=40
-            )
+            self._load_fonts()
             
-    def load_fonts(self, header_path: str, body_path: str, header_font_size: int, body_font_size: int):
+    def _load_fonts(self) -> None:
         """Load header and body fonts with specified paths and sizes."""
         try:
             # Load header font
-            if not header_path or not os.path.exists(header_path):
-                logger.error(f"Invalid header font path: {header_path}")
-                header_path = "/System/Library/Fonts/Helvetica.ttc"
+            if not st.session_state.header_font_path or not os.path.exists(st.session_state.header_font_path):
+                logger.error(f"Invalid header font path: {st.session_state.header_font_path}")
+                st.session_state.header_font_path = "/System/Library/Fonts/Helvetica.ttc"
                 
             # Load body font    
-            if not body_path or not os.path.exists(body_path):
-                logger.error(f"Invalid body font path: {body_path}")
-                body_path = "/System/Library/Fonts/Helvetica.ttc"
+            if not st.session_state.body_font_path or not os.path.exists(st.session_state.body_font_path):
+                logger.error(f"Invalid body font path: {st.session_state.body_font_path}")
+                st.session_state.body_font_path = "/System/Library/Fonts/Helvetica.ttc"
             
             # Try to load fonts
             try:
-                self.header_font = ImageFont.truetype(header_path, header_font_size)
-                logger.info(f"Successfully loaded header font: {header_path}")
+                self.header_font = ImageFont.truetype(st.session_state.header_font_path, 40)
             except Exception as e:
                 logger.error(f"Failed to load header font: {e}")
-                self.header_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", header_font_size)
+                self.header_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 40)
                 
             try:
-                self.body_font = ImageFont.truetype(body_path, body_font_size)
-                logger.info(f"Successfully loaded body font: {body_path}")
+                self.body_font = ImageFont.truetype(st.session_state.body_font_path, 40)
             except Exception as e:
                 logger.error(f"Failed to load body font: {e}")
-                self.body_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", body_font_size)
+                self.body_font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 40)
             
             # Cache the fonts
-            self._font_cache[f"{header_path}_{header_font_size}"] = self.header_font
-            self._font_cache[f"{body_path}_{body_font_size}"] = self.body_font
+            self._font_cache[f"{st.session_state.header_font_path}_40"] = self.header_font
+            self._font_cache[f"{st.session_state.body_font_path}_40"] = self.body_font
             
         except Exception as e:
             logger.error(f"Error in font loading: {e}")
             # Final fallback - use system font
             try:
                 fallback = "/System/Library/Fonts/Helvetica.ttc"
-                self.header_font = ImageFont.truetype(fallback, header_font_size)
-                self.body_font = ImageFont.truetype(fallback, body_font_size)
-                logger.info("Using system fallback font")
+                self.header_font = ImageFont.truetype(fallback, 40)
+                self.body_font = ImageFont.truetype(fallback, 40)
             except Exception as e:
                 logger.error(f"Failed to load system fallback font: {e}")
                 raise
@@ -635,8 +621,14 @@ class ImageProcessor:
         draw = ImageDraw.Draw(img)
         
         # Get header and footer text
-        header = image_config.get('header', '') if show_header_footer else ''
-        footer = image_config.get('footer', '') if show_header_footer else ''
+        header = ''
+        footer = ''
+        if show_header_footer:
+            # Use header override if provided in config, otherwise use default header
+            header_override = image_config.get('header_override', '')
+            header = header_override if header_override else image_config.get('header', '')
+            logger.info(f"[ImageProcessor] Using header text: '{header}' (override: '{header_override}')")
+            footer = image_config.get('footer', '')
         
         # Define margin for the image components
         margin = height * 0.05
@@ -648,7 +640,6 @@ class ImageProcessor:
         
         # Calculate and draw the header if it exists
         if header:
-            logger.info(f"Drawing header: '{header}'")
             header_bbox = draw.textbbox((0, 0), header, font=header_font)
             header_height = header_bbox[3] - header_bbox[1]
             header_width = draw.textlength(header, font=header_font)
@@ -661,7 +652,6 @@ class ImageProcessor:
         
         # Calculate and draw the footer if it exists
         if footer:
-            logger.info(f"Drawing footer: '{footer}'")
             footer_bbox = draw.textbbox((0, 0), footer, font=header_font)
             footer_height = footer_bbox[3] - footer_bbox[1]
             footer_y = height - margin - footer_height
@@ -673,8 +663,6 @@ class ImageProcessor:
         
         # Process the main text if it is not empty
         if text.strip():
-            logger.info(f"Processing main text (length: {len(text)})")
-            
             # Get initial body font
             body_font = self._get_cached_font(st.session_state.body_font_path, font_size)
             
@@ -687,17 +675,14 @@ class ImageProcessor:
                 font_size -= 2
                 body_font = self._get_cached_font(st.session_state.body_font_path, font_size)
                 text_height = self._calculate_text_height(text, body_font, width, draw)
-                logger.info(f"Adjusting font size to {font_size}, new text height: {text_height}")
             
             # Calculate the maximum number of characters per line
             avg_char_width = self.get_avg_char_width(draw, body_font)
             max_chars = int((width * 0.9) / avg_char_width)
-            logger.info(f"Max chars per line: {max_chars}")
             
             # Split text into paragraphs and wrap each one
             paragraphs = text.split('\n\n')
             processed_paragraphs = []
-            logger.info(f"Number of paragraphs: {len(paragraphs)}")
             
             for i, paragraph in enumerate(paragraphs):
                 if not paragraph.strip():
@@ -706,7 +691,6 @@ class ImageProcessor:
                     
                 wrapped_lines = wrap_paragraph(paragraph, max_chars)
                 processed_paragraphs.extend(wrapped_lines)
-                logger.info(f"Paragraph {i+1} wrapped into {len(wrapped_lines)} lines")
                 
                 if len(paragraphs) > 1:
                     processed_paragraphs.append("")
@@ -719,11 +703,9 @@ class ImageProcessor:
             
             # Calculate total height of text block
             text_block_height = len(processed_paragraphs) * line_spacing
-            logger.info(f"Text block height: {text_block_height}")
             
             # Calculate starting y position to center the text block vertically
             y = start_y + (available_height - text_block_height) / 2
-            logger.info(f"Starting y position: {y}")
             
             # Draw each line of text
             for i, line in enumerate(processed_paragraphs):
@@ -731,13 +713,12 @@ class ImageProcessor:
                     y += line_spacing
                     continue
                 
-                logger.info(f"Drawing line {i+1}: '{line[:15]}{'...' if len(line) > 15 else ''}'")
                 # Center each line horizontally
                 x = (width - draw.textlength(line, font=body_font)) // 2
                 self.draw_text_line(img, draw, line, x, y, font_size, FONT_CONFIG['DEFAULT_TEXT_COLOR'])
                 y += line_spacing
         else:
-            logger.info("No main text to process")
+            pass
         
         # Return the image with preserved alpha channel
         return img.convert('RGBA')
