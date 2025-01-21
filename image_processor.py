@@ -306,76 +306,58 @@ def load_background_image(config: Dict[str, str], width: int, height: int) -> Im
     :param height: Height of the final image.
     :return: An Image object of the loaded or created background.
     """
-    # Check if background image path is in config
-    if config and 'background_image_path' in config:
-        project_root = Path(__file__).parent
-        bg_path = project_root / config['background_image_path']
+    if not config:
+        # Create a blank image with alpha channel
+        return Image.new('RGBA', (width, height), DEFAULT_BACKGROUND_COLOR + (255,))
         
-        logger.info(f"Attempting to load background image from: {bg_path}")
-        
-        # Attempt to load image from the specified path
-        if bg_path.exists():
-            try:
-                bg_img = Image.open(bg_path)
-                logger.info(f"Successfully loaded background image: {bg_path}")
-                
-                # Calculate aspect ratios
-                bg_ratio = bg_img.width / bg_img.height
-                target_ratio = width / height
-                
-                # Resize the image to maintain aspect ratio
-                if bg_ratio > target_ratio:
-                    new_width = int(height * bg_ratio)
-                    bg_img = bg_img.resize((new_width, height))
-                    left = (new_width - width) // 2
-                    bg_img = bg_img.crop((left, 0, left + width, height))
-                else:
-                    new_height = int(width / bg_ratio)
-                    bg_img = bg_img.resize((width, new_height))
-                    top = (new_height - height) // 2
-                    bg_img = bg_img.crop((0, top, width, top + height))
-                
-                return bg_img.convert('RGB')
-            except Exception as e:
-                logger.error(f"Error loading background image: {e}")
-                logger.error(f"Attempted path: {bg_path}")
-        
-        else:
-            logger.error(f"Background image not found at path: {bg_path}")
-            # Try path relative to config file location
-            config_path = project_root / 'config.json'
-            if config_path.exists():
-                config_dir = config_path.parent
-                relative_path = config_dir / config['background_image_path']
-                
-                try:
-                    if relative_path.exists():
-                        bg_img = Image.open(relative_path)
-                        logger.info(f"Successfully loaded background image from config relative path: {relative_path}")
-                        
-                        bg_ratio = bg_img.width / bg_img.height
-                        target_ratio = width / height
-                        
-                        if bg_ratio > target_ratio:
-                            new_width = int(height * bg_ratio)
-                            bg_img = bg_img.resize((new_width, height))
-                            left = (new_width - width) // 2
-                            bg_img = bg_img.crop((left, 0, left + width, height))
-                        else:
-                            new_height = int(width / bg_ratio)
-                            bg_img = bg_img.resize((width, new_height))
-                            top = (new_height - height) // 2
-                            bg_img = bg_img.crop((0, top, width, top + height))
-                        
-                        return bg_img.convert('RGB')
-                except Exception as e:
-                    logger.error(f"Error loading background image from config relative path: {e}")
-                    logger.error(f"Attempted path: {relative_path}")
-    else:
-        logger.warning("No background_image_path in config, using default background")
+    # Get background image path from config
+    bg_path = config.get('background_image_path')
+    if not bg_path:
+        # Create a blank image with alpha channel
+        return Image.new('RGBA', (width, height), DEFAULT_BACKGROUND_COLOR + (255,))
     
-    # Return a blank image with default color if no image is found
-    return Image.new('RGB', (width, height), DEFAULT_BACKGROUND_COLOR)
+    # Try absolute path first
+    if not os.path.exists(bg_path):
+        logger.warning(f"Background image not found at absolute path: {bg_path}")
+        # Create a blank image with alpha channel
+        return Image.new('RGBA', (width, height), DEFAULT_BACKGROUND_COLOR + (255,))
+    
+    try:
+        # Open and convert to RGBA mode for alpha channel support
+        img = Image.open(bg_path).convert('RGBA')
+        
+        # Calculate resize dimensions preserving aspect ratio
+        img_width, img_height = img.size
+        aspect = img_width / img_height
+        
+        if width / height > aspect:
+            # Image is too tall, resize based on width
+            new_width = width
+            new_height = int(width / aspect)
+        else:
+            # Image is too wide, resize based on height
+            new_height = height
+            new_width = int(height * aspect)
+            
+        # Resize with high quality
+        img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        
+        # Create a new image with the target size and alpha channel
+        final_img = Image.new('RGBA', (width, height), DEFAULT_BACKGROUND_COLOR + (255,))
+        
+        # Calculate paste position to center
+        paste_x = (width - new_width) // 2
+        paste_y = (height - new_height) // 2
+        
+        # Paste resized image onto center of canvas
+        final_img.paste(img, (paste_x, paste_y))
+        
+        return final_img
+        
+    except Exception as e:
+        logger.error(f"Error loading background image {bg_path}: {e}")
+        # Create a blank image with alpha channel
+        return Image.new('RGBA', (width, height), DEFAULT_BACKGROUND_COLOR + (255,))
 
 class ImageProcessor:
     """Main class for handling image processing operations."""
@@ -528,39 +510,56 @@ class ImageProcessor:
         if any(c in emoji.EMOJI_DATA for c in line):
             emoji_font = self._get_cached_emoji_font(font_size)
         
-        # Track current x position
-        current_x = x
+        # Get image width
+        width = img.width
         
-        # Process each character
+        # If line has no emojis, use simple centered text drawing
+        if not any(c in emoji.EMOJI_DATA for c in line):
+            draw_centered_text(draw, line, x, y, body_font, width, text_color)
+            return draw.textlength(line, font=body_font)
+            
+        # For lines with emojis, we need to handle them specially
         current_text = ""
-        for char in line:
-            is_emoji = char in emoji.EMOJI_DATA
-            
-            # If we hit an emoji and have accumulated text, draw the text first
-            if is_emoji and current_text:
-                text_width = draw.textlength(current_text, font=body_font)
-                draw.text((current_x, y), current_text, font=body_font, fill=text_color)
-                current_x += text_width
-                current_text = ""
-            
-            # Handle the current character
-            if is_emoji:
-                if emoji_font:
-                    # Draw emoji with emoji font
-                    emoji_width = draw.textlength(char, font=emoji_font)
-                    draw.text((current_x, y), char, font=emoji_font, fill=text_color)
-                    current_x += emoji_width
-            else:
-                # Accumulate regular text
-                current_text += char
+        total_width = 0
         
+        # First pass: calculate total width
+        for char in line:
+            if char in emoji.EMOJI_DATA:
+                if current_text:
+                    total_width += draw.textlength(current_text, font=body_font)
+                    current_text = ""
+                if emoji_font:
+                    total_width += draw.textlength(char, font=emoji_font)
+            else:
+                current_text += char
+        if current_text:
+            total_width += draw.textlength(current_text, font=body_font)
+            
+        # Calculate starting x position for centering
+        start_x = (width - total_width) // 2
+        current_x = start_x
+        current_text = ""
+        
+        # Second pass: draw the text
+        for char in line:
+            if char in emoji.EMOJI_DATA:
+                if current_text:
+                    text_width = draw.textlength(current_text, font=body_font)
+                    draw.text((current_x, y), current_text, font=body_font, fill=text_color)
+                    current_x += text_width
+                    current_text = ""
+                if emoji_font:
+                    # Draw emoji with embedded color
+                    draw.text((current_x, y), char, font=emoji_font, embedded_color=True)
+                    current_x += draw.textlength(char, font=emoji_font)
+            else:
+                current_text += char
+                
         # Draw any remaining text
         if current_text:
-            text_width = draw.textlength(current_text, font=body_font)
             draw.text((current_x, y), current_text, font=body_font, fill=text_color)
-            current_x += text_width
         
-        return current_x - x
+        return total_width
 
     def get_header_font(self, size: Optional[int] = None) -> ImageFont.FreeTypeFont:
         """Get header font with optional size override."""
@@ -733,12 +732,15 @@ class ImageProcessor:
                     continue
                 
                 logger.info(f"Drawing line {i+1}: '{line[:15]}{'...' if len(line) > 15 else ''}'")
-                self.draw_text_line(img, draw, line, 0, y, font_size, FONT_CONFIG['DEFAULT_TEXT_COLOR'])
+                # Center each line horizontally
+                x = (width - draw.textlength(line, font=body_font)) // 2
+                self.draw_text_line(img, draw, line, x, y, font_size, FONT_CONFIG['DEFAULT_TEXT_COLOR'])
                 y += line_spacing
         else:
             logger.info("No main text to process")
         
-        return img
+        # Return the image with preserved alpha channel
+        return img.convert('RGBA')
 
     def _calculate_text_height(self, text: str, font: ImageFont.FreeTypeFont, width: int, 
                              draw: ImageDraw.Draw) -> float:
