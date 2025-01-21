@@ -3,8 +3,142 @@ import logging
 from typing import Dict, Set, Any, Optional, Type, Union
 from dataclasses import dataclass, field
 from PIL import Image
+import json
+from datetime import datetime
+import traceback
+from functools import wraps
 
+# Configure logging
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+class StateChangeLogger:
+    """Logs and tracks state changes for debugging and monitoring."""
+    
+    def __init__(self):
+        self.changes = []
+        self._max_changes = 1000  # Keep last 1000 changes
+        
+    def log_change(self, operation: str, key: str, old_value: Any, new_value: Any, source: str):
+        """Log a state change with metadata.
+        
+        Args:
+            operation: Type of change (set, update, sync)
+            key: State key being modified
+            old_value: Previous value
+            new_value: New value
+            source: Source of the change (e.g., 'AppState', 'SessionState')
+        """
+        try:
+            # Create change record
+            change = {
+                'timestamp': datetime.now().isoformat(),
+                'operation': operation,
+                'key': key,
+                'old_value': self._safe_serialize(old_value),
+                'new_value': self._safe_serialize(new_value),
+                'source': source,
+                'stack_trace': self._get_caller_info()
+            }
+            
+            # Add to changes list
+            self.changes.append(change)
+            
+            # Trim if too many changes
+            if len(self.changes) > self._max_changes:
+                self.changes = self.changes[-self._max_changes:]
+            
+            # Log the change
+            logger.debug(
+                f"State Change: {operation} | {key} | {source}\n"
+                f"Old: {change['old_value']}\n"
+                f"New: {change['new_value']}\n"
+                f"Caller: {change['stack_trace']}"
+            )
+            
+        except Exception as e:
+            logger.error(f"Error logging state change: {e}")
+            
+    def _safe_serialize(self, value: Any) -> str:
+        """Safely serialize value to string, handling non-JSON-serializable types."""
+        try:
+            if isinstance(value, (dict, list, str, int, float, bool, type(None))):
+                return json.dumps(value)
+            return str(value)
+        except Exception:
+            return str(value)
+            
+    def _get_caller_info(self) -> str:
+        """Get information about the caller from the stack trace."""
+        stack = traceback.extract_stack()
+        # Skip the last 3 frames (this method, log_change, and the decorator)
+        relevant_frame = stack[-4]
+        return f"{relevant_frame.filename}:{relevant_frame.lineno} in {relevant_frame.name}"
+        
+    def get_changes(self, limit: Optional[int] = None) -> list:
+        """Get recent state changes.
+        
+        Args:
+            limit: Optional limit on number of changes to return
+            
+        Returns:
+            List of recent state changes
+        """
+        if limit:
+            return self.changes[-limit:]
+        return self.changes.copy()
+        
+    def clear(self):
+        """Clear change history."""
+        self.changes = []
+
+def log_state_change(operation: str):
+    """Decorator to log state changes.
+    
+    Args:
+        operation: Type of operation being performed
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            # Get old state for changed keys
+            old_values = {}
+            if operation == 'update':
+                old_values = {k: self._state.get(k) for k in kwargs if k in self._state}
+            elif operation == 'set' and len(args) >= 2:
+                key = args[0]
+                old_values = {key: self._state.get(key)}
+            
+            # Execute the operation
+            result = func(self, *args, **kwargs)
+            
+            # Log changes
+            try:
+                if operation == 'update':
+                    for key, new_value in kwargs.items():
+                        if key in self._state:
+                            self._state_logger.log_change(
+                                operation, 
+                                key,
+                                old_values.get(key),
+                                self._state.get(key),
+                                'AppState'
+                            )
+                elif operation == 'set' and len(args) >= 2:
+                    key, new_value = args[0], args[1]
+                    self._state_logger.log_change(
+                        operation,
+                        key,
+                        old_values.get(key),
+                        self._state.get(key),
+                        'AppState'
+                    )
+            except Exception as e:
+                logger.error(f"Error in state change logging: {e}")
+                
+            return result
+        return wrapper
+    return decorator
 
 @dataclass
 class StateRegistry:
@@ -190,40 +324,16 @@ class AppState:
         # Initialize registry first
         self._registry = {}
         
+        # Initialize state logger
+        self._state_logger = StateChangeLogger()
+        
         # Initialize state with defaults
         self._state = StateValidator.get_default_state()
         
         # Initialize from session state if it exists
         self._init_from_session_state()
         
-    def _init_from_session_state(self):
-        """Initialize state from session state if it exists.
-        
-        IMPORTANT: This method is called during initialization to restore state after browser refreshes.
-        When modifying this method:
-        1. Ensure proper validation of stored state
-        2. Handle invalid stored values gracefully
-        3. Log any state recovery issues for debugging
-        """
-        if 'app_state' in st.session_state:
-            try:
-                stored_state = st.session_state['app_state']
-                if isinstance(stored_state, dict):
-                    # Validate and merge stored state
-                    for key, value in stored_state.items():
-                        if key in self._state:
-                            try:
-                                StateValidator.validate_type(key, value)
-                                self._state[key] = value
-                            except ValueError:
-                                logger.warning(f"Invalid stored value for {key}, using default")
-            except Exception as e:
-                logger.error(f"Error loading stored state: {e}")
-                
-    def _persist_to_session_state(self):
-        """Persist current state to session state."""
-        st.session_state['app_state'] = self._state.copy()
-        
+    @log_state_change('set')
     def set(self, key: str, value):
         """Set value for key."""
         StateValidator.validate_type(key, value)
@@ -231,6 +341,7 @@ class AppState:
         # Sync with session state
         self._persist_to_session_state()
         
+    @log_state_change('update')
     def update(self, **kwargs):
         """Update multiple state values.
         
@@ -256,6 +367,49 @@ class AppState:
                 
         # Sync with session state
         self._persist_to_session_state()
+                
+    def _persist_to_session_state(self):
+        """Persist current state to session state."""
+        st.session_state['app_state'] = self._state.copy()
+        
+    def get_state_changes(self, limit: Optional[int] = None) -> list:
+        """Get recent state changes.
+        
+        Args:
+            limit: Optional limit on number of changes to return
+            
+        Returns:
+            List of recent state changes
+        """
+        return self._state_logger.get_changes(limit)
+        
+    def clear_change_history(self):
+        """Clear state change history."""
+        self._state_logger.clear()
+        
+    def _init_from_session_state(self):
+        """Initialize state from session state if it exists.
+        
+        IMPORTANT: This method is called during initialization to restore state after browser refreshes.
+        When modifying this method:
+        1. Ensure proper validation of stored state
+        2. Handle invalid stored values gracefully
+        3. Log any state recovery issues for debugging
+        """
+        if 'app_state' in st.session_state:
+            try:
+                stored_state = st.session_state['app_state']
+                if isinstance(stored_state, dict):
+                    # Validate and merge stored state
+                    for key, value in stored_state.items():
+                        if key in self._state:
+                            try:
+                                StateValidator.validate_type(key, value)
+                                self._state[key] = value
+                            except ValueError:
+                                logger.warning(f"Invalid stored value for {key}, using default")
+            except Exception as e:
+                logger.error(f"Error loading stored state: {e}")
                 
     def sync_with_session(self):
         """Synchronize state with Streamlit session state.

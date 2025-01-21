@@ -469,5 +469,65 @@ class TestImageGridState(unittest.TestCase):
         self.state.clear_selections()
         self.assertEqual(self.state.get_selected_images(), {})
 
+class TestStateChangeLogging(unittest.TestCase):
+    """Test state change logging functionality."""
+    
+    def setUp(self):
+        """Set up test case with fresh state."""
+        self.state = AppState()
+        
+    def test_change_logging_set(self):
+        """Test that set operations are logged."""
+        self.state.set('test_key', 'test_value')
+        changes = self.state.get_state_changes()
+        
+        self.assertEqual(len(changes), 1)
+        change = changes[0]
+        self.assertEqual(change['operation'], 'set')
+        self.assertEqual(change['key'], 'test_key')
+        self.assertIn('test_value', change['new_value'])
+        self.assertIn('timestamp', change)
+        self.assertIn('stack_trace', change)
+        
+    def test_change_logging_update(self):
+        """Test that update operations are logged."""
+        self.state.update(test_dict={'key': 'value'})
+        changes = self.state.get_state_changes()
+        
+        self.assertEqual(len(changes), 1)
+        change = changes[0]
+        self.assertEqual(change['operation'], 'update')
+        self.assertEqual(change['key'], 'test_dict')
+        self.assertIn('value', change['new_value'])
+        
+    def test_change_history_limit(self):
+        """Test that change history is limited."""
+        # Make more changes than the limit
+        for i in range(1100):  # Max is 1000
+            self.state.set('test_key', f'value_{i}')
+            
+        changes = self.state.get_state_changes()
+        self.assertLessEqual(len(changes), 1000)
+        
+    def test_clear_change_history(self):
+        """Test clearing change history."""
+        self.state.set('test_key', 'test_value')
+        self.state.clear_change_history()
+        changes = self.state.get_state_changes()
+        self.assertEqual(len(changes), 0)
+        
+    def test_change_logging_with_invalid_value(self):
+        """Test logging changes with non-serializable values."""
+        # Create a circular reference
+        circular = {}
+        circular['self'] = circular
+        
+        # This should log without error, converting the circular reference to a string
+        self.state.update(test_dict=circular)
+        changes = self.state.get_state_changes()
+        
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]['key'], 'test_dict')
+
 if __name__ == '__main__':
     unittest.main()
