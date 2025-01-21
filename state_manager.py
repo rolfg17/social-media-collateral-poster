@@ -1,6 +1,6 @@
 import streamlit as st
 import logging
-from typing import Dict, Set, Any, Optional
+from typing import Dict, Set, Any, Optional, Type, Union
 from dataclasses import dataclass, field
 from PIL import Image
 
@@ -40,10 +40,350 @@ class StateRegistry:
         if self.exported_files is None:
             self.exported_files = set()
 
+@dataclass
+class StateSchema:
+    """Schema for state validation."""
+    type: Type
+    required: bool = True
+    default: Any = None
+    
+    def __post_init__(self):
+        """Initialize default value based on type."""
+        if self.default is None and not self.required:
+            if self.type in (dict, Dict):
+                self.default = {}
+            elif self.type == list:
+                self.default = []
+            elif self.type == set:
+                self.default = set()
+            elif self.type == str:
+                self.default = ''
+            elif self.type == bool:
+                self.default = False
+                
+    def validate(self, value: Any) -> bool:
+        """Validate a value against this schema."""
+        if value is None:
+            if self.required:
+                return False
+            return True
+            
+        # Special case for Any
+        if self.type == Any:
+            return True
+            
+        # Handle Optional types
+        if getattr(self.type, "__origin__", None) == Union:
+            if type(None) in self.type.__args__:
+                if value is None:
+                    return True
+                valid_types = [t for t in self.type.__args__ if t != type(None)]
+                return any(self._validate_type(value, t) for t in valid_types)
+                
+        return self._validate_type(value, self.type)
+        
+    def _validate_type(self, value: Any, type_: Type) -> bool:
+        """Validate a value against a type."""
+        # Handle generic types
+        origin = getattr(type_, "__origin__", None)
+        if origin is not None:
+            if origin in (dict, Dict):
+                if not isinstance(value, dict):
+                    return False
+                # Could add key/value type validation here
+                return True
+            elif origin in (list, List):
+                return isinstance(value, list)
+            elif origin in (set, Set):
+                return isinstance(value, set)
+                
+        # Handle Any type
+        if type_ == Any:
+            return True
+            
+        return isinstance(value, type_)
+        
+class StateValidator:
+    """Validates state against schema.
+    
+    IMPORTANT: When adding new state fields:
+    1. Add them to SCHEMA with appropriate type and default value
+    2. Update all relevant state categories that use the field
+    3. Add tests for the new field in test_state_manager.py
+    """
+    
+    # Schema for state validation
+    SCHEMA = {
+        # MAINTENANCE: Keep this schema in sync with StateRegistry dataclass
+        'images': StateSchema(Dict[str, Any], default={}),
+        'selected_images': StateSchema(Dict[str, bool], default={}),  
+        'show_header_footer': StateSchema(bool, default=True),
+        'select_all': StateSchema(bool, default=False),
+        'uploaded_files': StateSchema(list, default=[]),
+        'upload_status': StateSchema(str, default=''),
+        'upload_error': StateSchema(str, default=''),
+        'processed_file': StateSchema(Optional[Any], required=False),
+        'image_path': StateSchema(str, required=False, default=''),
+        'sections': StateSchema(Dict[str, Any], default={}),  
+        'cleaned_contents': StateSchema(Dict[str, str], default={}),
+        'header_override': StateSchema(str, default=''),
+        'header_font_path': StateSchema(str, required=False, default=''),
+        'body_font_path': StateSchema(str, required=False, default=''),
+        'is_authenticated': StateSchema(bool, default=False),
+        'drive_authenticated': StateSchema(bool, default=False),
+        'test_key': StateSchema(str, required=False),  # For testing
+        'test_dict': StateSchema(dict, required=False, default={})  # For testing
+    }
+    
+    @classmethod
+    def validate_type(cls, key: str, value: Any) -> bool:
+        """Validate type of a state value."""
+        if key not in cls.SCHEMA:
+            raise ValueError(f"Unknown state key: {key}")
+            
+        schema = cls.SCHEMA[key]
+        if not schema.validate(value):
+            raise ValueError(f"Invalid type for {key}: expected {schema.type}, got {type(value)}")
+            
+        return True
+        
+    @classmethod
+    def validate_state(cls, state: Dict[str, Any]) -> bool:
+        """Validate entire state."""
+        try:
+            # Check all required keys are present
+            for key, schema in cls.SCHEMA.items():
+                if schema.required and key not in state:
+                    raise ValueError(f"Missing required state key: {key}")
+                    
+            # Validate types of all present keys
+            for key, value in state.items():
+                if key in cls.SCHEMA:  # Only validate known keys
+                    cls.validate_type(key, value)
+                    
+            return True
+        except Exception as e:
+            logger.error(f"Error validating state: {str(e)}")
+            return False
+            
+    @classmethod
+    def get_default_state(cls) -> Dict[str, Any]:
+        """Get default state dict."""
+        return {
+            key: schema.default
+            for key, schema in cls.SCHEMA.items()
+            if schema.default is not None
+        }
+
+class AppState:
+    """Manages application state.
+    
+    IMPORTANT: This class maintains synchronization between internal state and Streamlit's session_state.
+    When modifying state:
+    1. Always use set() or update() methods, never modify _state directly
+    2. Always validate state changes through StateValidator
+    3. Ensure changes are properly synced with session_state
+    """
+    
+    def __init__(self):
+        """Initialize application state with defaults."""
+        # Initialize registry first
+        self._registry = {}
+        
+        # Initialize state with defaults
+        self._state = StateValidator.get_default_state()
+        
+        # Initialize from session state if it exists
+        self._init_from_session_state()
+        
+    def _init_from_session_state(self):
+        """Initialize state from session state if it exists.
+        
+        IMPORTANT: This method is called during initialization to restore state after browser refreshes.
+        When modifying this method:
+        1. Ensure proper validation of stored state
+        2. Handle invalid stored values gracefully
+        3. Log any state recovery issues for debugging
+        """
+        if 'app_state' in st.session_state:
+            try:
+                stored_state = st.session_state['app_state']
+                if isinstance(stored_state, dict):
+                    # Validate and merge stored state
+                    for key, value in stored_state.items():
+                        if key in self._state:
+                            try:
+                                StateValidator.validate_type(key, value)
+                                self._state[key] = value
+                            except ValueError:
+                                logger.warning(f"Invalid stored value for {key}, using default")
+            except Exception as e:
+                logger.error(f"Error loading stored state: {e}")
+                
+    def _persist_to_session_state(self):
+        """Persist current state to session state."""
+        st.session_state['app_state'] = self._state.copy()
+        
+    def set(self, key: str, value):
+        """Set value for key."""
+        StateValidator.validate_type(key, value)
+        self._state[key] = value
+        # Sync with session state
+        self._persist_to_session_state()
+        
+    def update(self, **kwargs):
+        """Update multiple state values.
+        
+        Args:
+            **kwargs: State updates
+            
+        Raises:
+            ValueError: If any value has an invalid type for a known key
+        """
+        # Validate all values first for known keys
+        valid_updates = {}
+        for key, value in kwargs.items():
+            if key in self._state:
+                StateValidator.validate_type(key, value)
+                valid_updates[key] = value
+            
+        # Then update all at once
+        for key, value in valid_updates.items():
+            if isinstance(self._state[key], dict) and isinstance(value, dict):
+                self._state[key].update(value)
+            else:
+                self._state[key] = value
+                
+        # Sync with session state
+        self._persist_to_session_state()
+                
+    def sync_with_session(self):
+        """Synchronize state with Streamlit session state.
+        
+        IMPORTANT: This method handles bi-directional sync between AppState and session_state.
+        When modifying this method:
+        1. Maintain atomicity - either all changes succeed or none do
+        2. Validate all values before applying changes
+        3. Handle sync failures gracefully with proper error recovery
+        4. Keep the sync logic in sync with _persist_to_session_state()
+        """
+        try:
+            # First sync from session state to app state
+            for key in self._state:
+                if key in st.session_state:
+                    try:
+                        value = st.session_state[key]
+                        StateValidator.validate_type(key, value)
+                        if isinstance(self._state[key], dict) and isinstance(value, dict):
+                            # Deep merge for dictionaries
+                            self._state[key].update(value)
+                        else:
+                            self._state[key] = value
+                    except ValueError:
+                        logger.warning(f"Invalid session state value for {key}, keeping current value")
+            
+            # Then ensure session state has all our state
+            for key, value in self._state.items():
+                if key not in st.session_state or st.session_state[key] != value:
+                    st.session_state[key] = value
+                    
+            # Persist full state
+            self._persist_to_session_state()
+            
+        except Exception as e:
+            logger.error(f"Error during state sync: {e}")
+            # Try to recover by re-initializing from defaults
+            self._state = StateValidator.get_default_state()
+            self._persist_to_session_state()
+    
+    def get(self, key: str, default=None):
+        """Get value for key."""
+        # First check internal state
+        if key in self._state:
+            return self._state[key]
+        # Then check registry
+        if key in self._registry:
+            return self._registry[key]
+        return default
+        
+    def has(self, key: str) -> bool:
+        """Check if key exists in state."""
+        return key in self._state or key in self._registry
+        
+    def register(self, category: str, instance: Any) -> None:
+        """Register a state category instance."""
+        self._registry[category] = instance
+        
+    def get_category(self, category: str) -> Any:
+        """Get a registered state category instance."""
+        return self._registry.get(category)
+        
+    def __getattr__(self, name: str) -> Any:
+        """Get attribute from state or registry."""
+        # First check internal state
+        if name in self._state:
+            return self._state[name]
+        # Then check registry
+        if name in self._registry:
+            return self._registry[name]
+        raise AttributeError(f"'{self.__class__.__name__}' has no attribute '{name}'")
+    
+    def get_state(self) -> dict:
+        """Get current state as dictionary.
+        
+        Returns:
+            dict: Current application state
+        """
+        return {
+            key: getattr(self, key, getattr(self._registry, key)) 
+            for key in StateValidator.SCHEMA
+        }
+    
+    def clear(self):
+        """Reset state to default values."""
+        self._registry = {}
+    
+    def validate_state(self) -> bool:
+        """Validate that the state is consistent."""
+        try:
+            # Get current state values
+            sections = getattr(self, 'sections', {})
+            cleaned_contents = getattr(self, 'cleaned_contents', {})
+            
+            # Log current state for debugging
+            logger.debug(f"Validating state - sections: {sections}")
+            logger.debug(f"Validating state - cleaned_contents: {cleaned_contents}")
+            
+            # Skip validation if both sections and contents are empty (initial state)
+            if not sections and not cleaned_contents:
+                logger.debug("Empty state is valid")
+                return True
+                
+            # Validate sections and cleaned_contents match
+            section_keys = set(sections.keys())
+            content_keys = set(cleaned_contents.keys())
+            
+            if section_keys != content_keys:
+                logger.error(f"Section keys {section_keys} don't match content keys {content_keys}")
+                logger.error(f"Sections: {sections}")
+                logger.error(f"Cleaned contents: {cleaned_contents}")
+                return False
+                
+            logger.debug("State validation successful")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error validating state: {str(e)}")
+            return False
+
 class StateCategory:
     """Base class for state categories.
     
-    Each category manages a specific subset of the application state.
+    IMPORTANT: When creating new state categories:
+    1. Always inherit from this class
+    2. Use the provided state_manager for all state operations
+    3. Never access Streamlit's session_state directly
+    4. Add appropriate tests in test_state_manager.py
     """
     
     def __init__(self, state_manager):
@@ -55,8 +395,17 @@ class StateCategory:
         self.state = state_manager
 
 class UIState(StateCategory):
-    """Manages UI-specific state."""
+    """Manages UI state."""
     
+    def __init__(self, app_state: AppState):
+        """Initialize UI state.
+        
+        Args:
+            app_state: Application state
+        """
+        super().__init__(app_state)
+        self.app = app_state
+        
     def get_checkbox(self, key: str) -> bool:
         """Get checkbox state by key.
         
@@ -124,7 +473,7 @@ class UIState(StateCategory):
         Args:
             file: The file to set as processed
         """
-        self.state.update(processed_file=file)
+        self.app.set('processed_file', file)
         
     def get_import_results(self) -> Dict[str, Any]:
         """Get import results.
@@ -150,268 +499,40 @@ class UIState(StateCategory):
         """
         return getattr(self.state, "file_uploader", None)
 
-class AppState:
-    """Manages application state."""
-    
-    VALID_KEYS = {
-        'sections', 'cleaned_contents', 'images', 'selected_images',
-        'select_all', 'show_header_footer', 'header_override',
-        'header_font_path', 'body_font_path', 'import_results', 
-        'exported_files', 'drive_authenticated', 'checkbox_keys', 'processed_file',
-        'test_dict', 'test_key', 'uploaded_files', 'upload_status', 'upload_error', 'image_path', 'grid_images'  # For testing purposes
-    }
-    
-    def __init__(self):
-        """Initialize application state."""
-        # Initialize registry first to avoid recursion
-        self._registry = {}
-        
-        # Initialize state attributes
-        self.sections = {}
-        self.cleaned_contents = {}
-        self.images = {}
-        self.selected_images = {}
-        self.select_all = False
-        self.show_header_footer = True
-        self.header_override = ""
-        self.header_font_path = ""
-        self.body_font_path = ""
-        self.import_results = {}
-        self.exported_files = set()
-        self.drive_authenticated = False
-        self.checkbox_keys = {}
-        self.processed_file = None
-        self.test_dict = {}  # For testing purposes
-        self.test_key = None  # For testing purposes
-        self.uploaded_files = {}
-        self.upload_status = ""
-        self.upload_error = ""
-        self.image_path = ""
-        self.grid_images = {}  # Initialize as dict instead of list
-        
-        # Sync with session state
-        for key in self.VALID_KEYS:
-            if not hasattr(self, key):
-                setattr(self, key, None)
-    
-    def get(self, key: str, default: Any = None) -> Any:
-        """Get state attribute value.
-        
-        Args:
-            key: Attribute name
-            default: Default value if attribute doesn't exist
-            
-        Returns:
-            Any: Attribute value or default
-        """
-        # First check session state
-        if key in st.session_state:
-            return st.session_state[key]
-        # Then check our state
-        return getattr(self, key, default)
-        
-    def set(self, key: str, value: Any):
-        """Set state attribute value.
-        
-        Args:
-            key: Attribute name
-            value: Value to set
-        """
-        # Update both our state and session state
-        setattr(self, key, value)
-        st.session_state[key] = value
-                
-    def update(self, **kwargs) -> bool:
-        """Update state attributes.
-        
-        Args:
-            **kwargs: Keyword arguments mapping attribute names to values
-            
-        Returns:
-            bool: True if update was successful
-            
-        Note:
-            CRITICAL: This method MUST update both the internal state AND st.session_state
-            to maintain consistency. Streamlit widgets read their values from session_state,
-            so failing to update it will cause widgets to get out of sync.
-            
-            Example: The show_header_footer checkbox reads its value from session_state,
-            so if we don't update session_state here, the checkbox will revert to its
-            previous value even though our internal state changed.
-        """
-        try:
-            # Validate keys
-            for key in kwargs:
-                if key not in self.VALID_KEYS:
-                    raise ValueError(f"Invalid state key: {key}")
-                    
-            # Update attributes
-            for key, value in kwargs.items():
-                if isinstance(value, dict) and hasattr(self, key) and isinstance(getattr(self, key), dict):
-                    # Merge dictionaries
-                    current = dict(getattr(self, key))
-                    current.update(value)
-                    setattr(self, key, current)
-                    st.session_state[key] = current
-                else:
-                    setattr(self, key, value)
-                    st.session_state[key] = value
-                logger.debug(f"Updated state - {key}: {value}")
-                
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error updating state: {str(e)}")
-            return False
-            
-    def register(self, category: str, instance: Any) -> None:
-        """Register a state category instance.
-        
-        Args:
-            category: Category name
-            instance: Category instance
-        """
-        self._registry[category] = instance
-        
-    def get_category(self, category: str) -> Optional[Any]:
-        """Get a registered state category instance.
-        
-        Args:
-            category: Category name
-            
-        Returns:
-            Optional[Any]: Category instance if found, None otherwise
-        """
-        return self._registry.get(category)
-    
-    def has(self, key: str) -> bool:
-        """Check if a key exists in state.
-        
-        Args:
-            key: Key to check
-            
-        Returns:
-            bool: True if key exists, False otherwise
-        """
-        return hasattr(self, key)
-    
-    def __getattr__(self, name: str) -> Any:
-        """Get state attribute from registry."""
-        if hasattr(self._registry, name):
-            return getattr(self._registry, name)
-        raise AttributeError(f"'{self.__class__.__name__}' has no attribute '{name}'")
-    
-    def validate_state(self) -> bool:
-        """Validate that the state is consistent."""
-        try:
-            # Get current state values
-            sections = getattr(self, 'sections', {})
-            cleaned_contents = getattr(self, 'cleaned_contents', {})
-            
-            # Log current state for debugging
-            logger.debug(f"Validating state - sections: {sections}")
-            logger.debug(f"Validating state - cleaned_contents: {cleaned_contents}")
-            
-            # Skip validation if both sections and contents are empty (initial state)
-            if not sections and not cleaned_contents:
-                logger.debug("Empty state is valid")
-                return True
-                
-            # Validate sections and cleaned_contents match
-            section_keys = set(sections.keys())
-            content_keys = set(cleaned_contents.keys())
-            
-            if section_keys != content_keys:
-                logger.error(f"Section keys {section_keys} don't match content keys {content_keys}")
-                logger.error(f"Sections: {sections}")
-                logger.error(f"Cleaned contents: {cleaned_contents}")
-                return False
-                
-            logger.debug("State validation successful")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error validating state: {str(e)}")
-            return False
-    
-    def get_state(self) -> dict:
-        """Get current state as dictionary.
-        
-        Returns:
-            dict: Current application state
-        """
-        return {
-            key: getattr(self, key, getattr(self._registry, key)) 
-            for key in self.VALID_KEYS
-        }
-    
-    def clear(self):
-        """Reset state to default values."""
-        self._registry = {}
-    
-    def sync_with_session(self):
-        """Synchronize the state with Streamlit's session state.
-        
-        Note: In production, this syncs with st.session_state.
-        In test mode, it maintains the current state.
-        """
-        # First sync from session state to our state
-        for key in self.VALID_KEYS:
-            if key in st.session_state:
-                setattr(self, key, st.session_state[key])
-            elif hasattr(self, key):
-                # If key exists in our state but not in session state, sync it to session state
-                st.session_state[key] = getattr(self, key)
-            else:
-                # Initialize both our state and session state
-                setattr(self, key, None)
-                st.session_state[key] = None
-
-        # Ensure critical state values are initialized
-        if 'cleaned_contents' not in st.session_state:
-            st.session_state['cleaned_contents'] = {}
-        if 'grid_images' not in st.session_state:
-            st.session_state['grid_images'] = {}
-        if 'show_header_footer' not in st.session_state:
-            st.session_state['show_header_footer'] = True
-        if 'header_override' not in st.session_state:
-            st.session_state['header_override'] = ""
-
-        # Sync our state with session state for these critical values
-        self.cleaned_contents = st.session_state['cleaned_contents']
-        self.grid_images = st.session_state['grid_images']
-        self.show_header_footer = st.session_state['show_header_footer']
-        self.header_override = st.session_state['header_override']
-
 class ImageGridState(StateCategory):
     """Manages state for image grid UI."""
     
-    def __init__(self, ui_state: 'UIState', app_state: AppState):
+    def __init__(self, ui_state: UIState, app_state: AppState):
         """Initialize image grid state.
         
         Args:
-            ui_state: UI state manager
-            app_state: Application state manager
+            ui_state: UI state instance
+            app_state: Application state instance
         """
         super().__init__(app_state)
-        self.ui_state = ui_state
-        self.app = self.state
+        self.ui = ui_state
+        self.app = app_state
         
-    def get_images(self):
-        """Get list of images to display.
+    def get_images(self) -> Dict[str, Any]:
+        """Get current images.
         
         Returns:
-            dict: Dictionary of images
+            Dict[str, Any]: Current images
         """
-        return self.app.get("grid_images", {})
+        return self.app.get('images', {})
         
-    def set_images(self, images):
-        """Set list of images to display.
+    def set_images(self, images: Dict[str, Any]):
+        """Set current images.
         
         Args:
-            images: Dictionary of image paths
+            images: Images to set
+            
+        Raises:
+            ValueError: If images is not a dictionary
         """
-        self.app.update(grid_images=images)
+        if not isinstance(images, dict):
+            raise ValueError("Images must be a dictionary")
+        self.app.set('images', images)
         
     def get_selected_images(self):
         """Get selected images.
@@ -442,13 +563,13 @@ class ImageGridState(StateCategory):
         
     def clear_selections(self):
         """Clear all image selections."""
-        self.state.selected_images = {}
+        self.app.set('selected_images', {})
         self.app.sync_with_session()
 
 class HeaderSettingsState(StateCategory):
     """State interface for HeaderSettings component."""
     
-    def __init__(self, ui_state: 'UIState', app_state: AppState):
+    def __init__(self, ui_state: UIState, app_state: AppState):
         """Initialize HeaderSettings state interface.
         
         Args:
@@ -514,7 +635,7 @@ class HeaderSettingsState(StateCategory):
 class MainContentState(StateCategory):
     """Manages state for main content UI."""
     
-    def __init__(self, ui_state: 'UIState', app_state: AppState):
+    def __init__(self, ui_state: UIState, app_state: AppState):
         """Initialize main content state.
         
         Args:
@@ -584,7 +705,7 @@ class MainContentState(StateCategory):
 class ConfigurationState(StateCategory):
     """Manages state for configuration UI."""
     
-    def __init__(self, ui_state: 'UIState', app_state: AppState):
+    def __init__(self, ui_state: UIState, app_state: AppState):
         """Initialize configuration state.
         
         Args:
@@ -619,14 +740,7 @@ class ConfigurationState(StateCategory):
         Returns:
             bool: True if show header/footer is checked
         """
-        # Default to True if not in session state
-        if 'show_header_footer' not in st.session_state:
-            st.session_state.show_header_footer = True
-            self.app.show_header_footer = True
-            
-        current = self.app.get('show_header_footer', True)
-        logger.debug(f"Current show_header_footer state: {current}")
-        return current
+        return self.app.get('show_header_footer', True)
         
     def set_show_header_footer(self, value: bool) -> None:
         """Set show header/footer checkbox state.
@@ -635,9 +749,7 @@ class ConfigurationState(StateCategory):
             value: New checkbox state
         """
         logger.debug(f"Setting show_header_footer to: {value}")
-        # Update both internal state and session state
         self.app.update(show_header_footer=value)
-        st.session_state.show_header_footer = value
         
     def get_header_override(self) -> str:
         """Get header override text.
@@ -661,7 +773,7 @@ class ConfigurationState(StateCategory):
 class FileUploaderState(StateCategory):
     """Manages state for file uploader UI."""
     
-    def __init__(self, ui_state: 'UIState', app_state: AppState):
+    def __init__(self, ui_state: UIState, app_state: AppState):
         """Initialize file uploader state.
         
         Args:
@@ -737,12 +849,12 @@ class FileUploaderState(StateCategory):
         Args:
             content: Processed file content
         """
-        self.app.update(processed_file=content)
+        self.app.set('processed_file', content)  # Use set instead of update
 
 class PhotosState(StateCategory):
     """Manages state for Photos app integration."""
     
-    def __init__(self, ui_state: 'UIState', app_state: AppState):
+    def __init__(self, ui_state: UIState, app_state: AppState):
         """Initialize photos state.
         
         Args:
@@ -772,7 +884,7 @@ class PhotosState(StateCategory):
 class DriveState(StateCategory):
     """Manages state for Google Drive integration."""
     
-    def __init__(self, ui_state: 'UIState', app_state: AppState):
+    def __init__(self, ui_state: UIState, app_state: AppState):
         """Initialize drive state.
         
         Args:
@@ -802,7 +914,7 @@ class DriveState(StateCategory):
 class ExportOptionsState(StateCategory):
     """Manages state for export options UI."""
     
-    def __init__(self, ui_state: 'UIState', app_state: AppState):
+    def __init__(self, ui_state: UIState, app_state: AppState):
         """Initialize export options state.
         
         Args:

@@ -1,6 +1,7 @@
 import unittest
 from state_manager import AppState, StateCategory, UIState, ImageGridState, ConfigurationState, HeaderSettingsState, FileUploaderState, MainContentState, PhotosState, DriveState
 from unittest.mock import MagicMock
+import streamlit as st
 
 class TestAppState(unittest.TestCase):
     def setUp(self):
@@ -312,6 +313,161 @@ class TestDriveState(unittest.TestCase):
         # Test setting not authenticated
         self.state.set_authenticated(False)
         self.assertFalse(self.state.is_authenticated())
+
+class TestStreamlitStateSync(unittest.TestCase):
+    """Test synchronization between AppState and Streamlit session state."""
+    
+    def setUp(self):
+        """Set up test case with fresh state instances and mock session state"""
+        self.app_state = AppState()
+        self.ui_state = UIState(self.app_state)
+        self.config_state = ConfigurationState(self.ui_state, self.app_state)
+        
+        # Mock streamlit session state
+        self.mock_session_state = {}
+        self._original_session_state = getattr(st, 'session_state', None)
+        setattr(st, 'session_state', self.mock_session_state)
+        
+    def tearDown(self):
+        """Restore original session state"""
+        if self._original_session_state is not None:
+            setattr(st, 'session_state', self._original_session_state)
+            
+    def test_show_header_footer_sync(self):
+        """Test show_header_footer stays in sync between AppState and session state"""
+        # Test initial state
+        self.assertTrue(self.config_state.get_show_header_footer())
+        self.assertFalse('show_header_footer' in self.mock_session_state)
+        
+        # Test setting through config state
+        self.config_state.set_show_header_footer(False)
+        self.assertFalse(self.config_state.get_show_header_footer())
+        self.assertFalse(self.app_state.get('show_header_footer'))
+        
+        # Test setting through session state
+        self.mock_session_state['show_header_footer'] = True
+        self.app_state.sync_with_session()
+        self.assertTrue(self.config_state.get_show_header_footer())
+        
+    def test_state_initialization_order(self):
+        """Test state initialization happens in correct order"""
+        # Clear any existing state
+        self.app_state = AppState()
+        self.ui_state = UIState(self.app_state)
+        self.config_state = ConfigurationState(self.ui_state, self.app_state)
+        
+        # Verify default values are set correctly
+        self.assertTrue(self.config_state.get_show_header_footer())
+        self.assertFalse(self.config_state.get_select_all())
+        
+        # Verify session state doesn't override defaults on init
+        self.mock_session_state['show_header_footer'] = False
+        new_app_state = AppState()
+        new_config_state = ConfigurationState(UIState(new_app_state), new_app_state)
+        self.assertTrue(new_config_state.get_show_header_footer())
+
+class TestStateValidation(unittest.TestCase):
+    """Test state validation."""
+    
+    def setUp(self):
+        """Set up test case."""
+        self.state = AppState()
+        
+    def test_valid_state_initialization(self):
+        """Test that default state is valid."""
+        self.assertTrue(self.state.validate_state())
+        
+    def test_invalid_type(self):
+        """Test that invalid types are caught."""
+        with self.assertRaises(ValueError):
+            self.state.set('images', 'not a dict')
+            
+        with self.assertRaises(ValueError):
+            self.state.set('show_header_footer', 'not a bool')
+            
+        with self.assertRaises(ValueError):
+            self.state.set('selected_images', ['not a set'])
+            
+    def test_required_fields(self):
+        """Test that required fields cannot be None."""
+        with self.assertRaises(ValueError):
+            self.state.set('images', None)
+            
+        # Optional fields can be None
+        self.state.set('processed_file', None)
+        self.assertTrue(self.state.validate_state())
+        
+    def test_unknown_key(self):
+        """Test that unknown keys are caught."""
+        with self.assertRaises(ValueError):
+            self.state.set('unknown_key', 'value')
+            
+    def test_update_validation(self):
+        """Test that update validates all values."""
+        with self.assertRaises(ValueError):
+            self.state.update(
+                images='not a dict',
+                show_header_footer='not a bool'
+            )
+        # State should remain unchanged
+        self.assertTrue(isinstance(self.state.get('images'), dict))
+        self.assertTrue(isinstance(self.state.get('show_header_footer'), bool))
+        
+    def test_dict_merge(self):
+        """Test that dictionary values are merged correctly."""
+        initial_images = {'img1': 'data1'}
+        self.state.set('images', initial_images)
+        
+        # Update with new image
+        self.state.update(images={'img2': 'data2'})
+        
+        # Both images should be present
+        self.assertEqual(
+            self.state.get('images'),
+            {'img1': 'data1', 'img2': 'data2'}
+        )
+
+class TestImageGridState(unittest.TestCase):
+    """Test image grid state management."""
+    
+    def setUp(self):
+        """Set up test case."""
+        self.app_state = AppState()
+        self.ui_state = UIState(self.app_state)
+        self.state = ImageGridState(self.ui_state, self.app_state)
+        
+    def test_image_state_sync(self):
+        """Test that image state stays in sync."""
+        test_images = {'img1': 'data1', 'img2': 'data2'}
+        
+        # Set images
+        self.state.set_images(test_images)
+        
+        # Verify internal state
+        self.assertEqual(self.state.get_images(), test_images)
+        self.assertEqual(self.app_state.get('images'), test_images)
+        
+        # Verify type validation
+        with self.assertRaises(ValueError):
+            self.state.set_images(['not a dict'])
+            
+    def test_selected_images_sync(self):
+        """Test that selected images stay in sync."""
+        # Set up some images
+        test_images = {'img1': 'data1', 'img2': 'data2'}
+        self.state.set_images(test_images)
+        
+        # Select an image
+        self.state.select_image('img1', True)
+        
+        # Verify selection state
+        selected = self.state.get_selected_images()
+        self.assertTrue(selected.get('img1'))
+        self.assertFalse(selected.get('img2', False))
+        
+        # Clear selections
+        self.state.clear_selections()
+        self.assertEqual(self.state.get_selected_images(), {})
 
 if __name__ == '__main__':
     unittest.main()

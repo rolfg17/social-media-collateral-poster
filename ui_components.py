@@ -23,10 +23,10 @@ class BaseUI:
             state: Application state manager
         """
         self.state = state
-        # Initialize session state if needed
-        for key in state.VALID_KEYS:
-            if key not in st.session_state:
-                st.session_state[key] = getattr(state, key)
+        # Initialize UI state
+        self.ui_state = state.get_category('ui') or UIState(state)
+        if not state.has('ui'):
+            state.register('ui', self.ui_state)
 
 class ImageGridUI(BaseUI):
     """Handles image grid UI components."""
@@ -40,7 +40,6 @@ class ImageGridUI(BaseUI):
         """
         super().__init__(state)
         self.app = app
-        self.ui_state = UIState(state)
         self.grid_state = ImageGridState(self.ui_state, state)
         
     def render(self):
@@ -96,7 +95,6 @@ class HeaderSettingsUI(BaseUI):
         super().__init__(state)
         self.config = config
         self.app = app
-        self.ui_state = UIState(state)
         self.header_state = HeaderSettingsState(self.ui_state, state)
         self.config_state = ConfigurationState(self.ui_state, state)
         self.grid_state = ImageGridState(self.ui_state, state)
@@ -113,13 +111,13 @@ class HeaderSettingsUI(BaseUI):
         logger.info(f"[UI] Previous state - header_override: '{prev_header_override}'")
         
         # Header override input
-        header_override = st.sidebar.text_area(
+        header_override = st.sidebar.text_input(
             "Header Override",
             value=prev_header_override or "",
             key="header_override_input"
         )
         
-        # Only update if value actually changed
+        # Only update if changed
         if header_override != prev_header_override:
             logger.info(f"[UI] Header override changed: '{prev_header_override}' -> '{header_override}'")
             self.config_state.set_header_override(header_override)
@@ -186,7 +184,6 @@ class ConfigurationUI(BaseUI):
         super().__init__(state)
         self.config = config
         self.app = app
-        self.ui_state = UIState(state)
         self.config_state = ConfigurationState(self.ui_state, state)
         self.header_state = HeaderSettingsState(self.ui_state, state)
         self.grid_state = ImageGridState(self.ui_state, state)
@@ -207,15 +204,13 @@ class ConfigurationUI(BaseUI):
         show_header = st.sidebar.checkbox(
             "Show Header/Footer",
             value=prev_show_header,
-            key="config_show_header_footer"  # Changed key to be unique
+            key="show_header_footer"
         )
         
         # Only update if changed
         if show_header != prev_show_header:
             logger.info(f"[UI] Show header/footer changed: {prev_show_header} -> {show_header}")
             self.config_state.set_show_header_footer(show_header)
-            # Force a state sync and regenerate images
-            self.state.update(show_header_footer=show_header)  # Update both internal and session state
             logger.info("Starting image regeneration due to header/footer toggle")
             self._regenerate_images()
             
@@ -223,15 +218,13 @@ class ConfigurationUI(BaseUI):
         select_all = st.sidebar.checkbox(
             "Select All",
             value=prev_select_all,
-            key="config_select_all"  # Changed key to be unique
+            key="select_all"
         )
         
         # Only update if changed
         if select_all != prev_select_all:
             logger.info(f"[UI] Select all changed: {prev_select_all} -> {select_all}")
             self.config_state.set_select_all(select_all)
-            # Force a state sync
-            self.state.update(select_all=select_all)  # Update both internal and session state
             
     def _regenerate_images(self):
         """Regenerate all images with current settings."""
@@ -239,7 +232,7 @@ class ConfigurationUI(BaseUI):
         
         # Get current state
         show_header = self.config_state.get_show_header_footer()
-        header_override = self.header_state.get_header_override()  # Use header_state instead of config_state
+        header_override = self.config_state.get_header_override()
         logger.info(f"Current settings - show_header: {show_header}, header_override: '{header_override}'")
         
         # Use MainContentState to access cleaned_contents
@@ -277,8 +270,6 @@ class ConfigurationUI(BaseUI):
         logger.info(f"Regeneration complete - Success: {success_count}, Failed: {fail_count}")
         logger.info("Updating grid state with new images")
         self.grid_state.set_images(grid_images)
-        # Force a state sync after updating images
-        self.state.sync_with_session()
         logger.info("=== Image regeneration flow complete ===")
 
 class ExportOptionsUI(BaseUI):
@@ -293,7 +284,6 @@ class ExportOptionsUI(BaseUI):
         """
         super().__init__(state)
         self.app = app
-        self.ui_state = UIState(state)
         self.export_state = ExportOptionsState(self.ui_state, state)
         
     def render(self):
@@ -328,7 +318,6 @@ class FileUploaderUI(BaseUI):
         super().__init__(state)
         self.file_processor = file_processor
         self.app = app
-        self.ui_state = UIState(state)
         self.uploader_state = FileUploaderState(self.ui_state, state)
         self.header_state = HeaderSettingsState(self.ui_state, state)
         self.config_state = ConfigurationState(self.ui_state, state)
@@ -441,7 +430,6 @@ class MainContentUI(BaseUI):
         """
         super().__init__(state)
         self.app = app
-        self.ui_state = UIState(state)
         self.main_content_state = MainContentState(self.ui_state, state)
         
     def render(self):
@@ -473,7 +461,6 @@ class PhotosUI(BaseUI):
         """
         super().__init__(state)
         self.app = app
-        self.ui_state = UIState(state)
         self.photos_state = PhotosState(self.ui_state, state)
         
     def render(self):
@@ -550,7 +537,6 @@ class DriveUI(BaseUI):
         """
         super().__init__(state)
         self.app = app
-        self.ui_state = UIState(state)
         self.drive_state = DriveState(self.ui_state, state)
         
     def render(self):
