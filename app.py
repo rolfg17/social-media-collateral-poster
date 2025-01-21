@@ -150,16 +150,9 @@ def main():
         if app.drive_ui:
             app.drive_ui.render()
     
-    # Main content area
-    col1, col2 = st.columns([2, 3])
-    
-    # Render main content in first column
-    with col1:
-        app.main_content.render()
-    
-    # Render image grid in second column
-    with col2:
-        app.image_grid.render()
+    # Render main content
+    app.main_content.render()
+    app.image_grid.render()
 
 if __name__ == "__main__":
     import sys
